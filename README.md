@@ -144,6 +144,42 @@ Client                              Server
   │  [All further packets encrypted]   │
 ```
 
+## Adoption Strategy
+
+POOL solves the four problems that killed every previous transport protocol:
+
+### 1. Migration Strategy — `pool_bridge`
+TCP↔POOL bidirectional proxy. Deploy at the network edge — legacy TCP apps connect normally, traffic is encrypted over POOL internally. No application changes required.
+```bash
+pool_bridge tcp2pool 8080 10.4.4.101 9253   # TCP in, POOL out
+pool_bridge pool2tcp 9253 127.0.0.1 80      # POOL in, TCP out
+```
+See [`spec/MIGRATION.md`](spec/MIGRATION.md) for the three-phase migration plan.
+
+### 2. Compatibility Layer — `libpool_shim.so`
+LD_PRELOAD shim that intercepts POSIX socket calls. Existing applications (curl, nginx, ssh) work over POOL with zero code changes.
+```bash
+LD_PRELOAD=/usr/lib/libpool_shim.so curl http://10.4.4.101
+LD_PRELOAD=/usr/lib/libpool_shim.so nginx
+```
+
+### 3. Killer Application — `pool_vault`
+Encrypted distributed file vault that only works over POOL. No accounts, no cloud, no intermediaries. Security guarantees hold because POOL enforces them at transport level.
+```bash
+pool_vault serve /shared                          # Share a directory
+pool_vault push 10.4.4.101 report.pdf /incoming/  # Push a file
+pool_vault pull 10.4.4.101 /data/backup.tar.gz ./ # Pull a file
+```
+
+### 4. Operator Incentives — `pool_relay`
+Relay daemon with bandwidth reciprocity. Operators earn a generosity score (contributed/consumed ratio) → higher score = priority routing. No cryptocurrency, no tokens — just bandwidth for bandwidth, verified by cryptography.
+```bash
+pool_relay start                    # Start relaying traffic
+pool_relay enroll 10.4.4.101        # Peer with another relay
+pool_relay status                   # Check reputation score
+```
+See [`spec/OPERATORS.md`](spec/OPERATORS.md) for the incentive model.
+
 ## Test Results
 
 ```
@@ -159,29 +195,44 @@ Authenticated:  Yes (HMAC-SHA256)
 
 ```
 POOL/
-├── README.md              # This file
+├── README.md
 ├── spec/
-│   ├── PROTOCOL.md        # Complete protocol specification
+│   ├── PROTOCOL.md           # Complete protocol specification
+│   ├── MIGRATION.md          # Three-phase TCP→POOL migration strategy
+│   ├── OPERATORS.md          # Network operator incentive structure
 │   └── STALLED_PROTOCOLS.md  # Analysis of 18 failed protocols
-├── linux/
-│   ├── pool.h             # Public API (packet types, ioctls, structs)
-│   ├── pool_internal.h    # Kernel-internal state
-│   ├── pool_main.c        # Module init, char device, ioctl dispatch
-│   ├── pool_crypto.c      # X25519 KPP, HKDF, ChaCha20-Poly1305, HMAC
-│   ├── pool_net.c         # TCP transport, POOL packet framing
-│   ├── pool_session.c     # Handshake, session lifecycle, RX thread
-│   ├── pool_data.c        # Data send/recv with fragmentation
-│   ├── pool_telemetry.c   # Heartbeat, RTT/jitter/throughput tracking
-│   ├── pool_sysinfo.c     # /proc/pool/* reporting
-│   ├── pool_journal.c     # SHA256-chained audit journal
-│   ├── poolctl.c          # CLI control tool
-│   ├── pool_test.c        # Benchmark tool (server/client/bench)
-│   ├── poold.c            # Daemon (starts listener)
-│   ├── Kbuild             # Kernel build config
-│   └── Makefile           # Module + tools build
-├── windows/               # (Future: Windows driver)
-├── common/                # (Future: cross-platform code)
-└── tools/                 # (Future: additional tools)
+├── linux/                    # Kernel module + core tools
+│   ├── pool.h                # Public API (packet types, ioctls, structs)
+│   ├── pool_internal.h       # Kernel-internal state
+│   ├── pool_main.c           # Module init, char device, ioctl dispatch
+│   ├── pool_crypto.c         # X25519 KPP, HKDF, ChaCha20-Poly1305, HMAC
+│   ├── pool_net.c            # TCP transport, POOL packet framing
+│   ├── pool_session.c        # Handshake, session lifecycle, RX thread
+│   ├── pool_data.c           # Data send/recv with fragmentation
+│   ├── pool_telemetry.c      # Heartbeat, RTT/jitter/throughput tracking
+│   ├── pool_sysinfo.c        # /proc/pool/* reporting
+│   ├── pool_journal.c        # SHA256-chained audit journal
+│   ├── poolctl.c             # CLI control tool
+│   ├── pool_test.c           # Benchmark tool (server/client/bench)
+│   ├── poold.c               # Daemon (starts listener)
+│   ├── Kbuild                # Kernel build config
+│   └── Makefile              # Module + tools build
+├── shim/                     # Socket compatibility layer
+│   ├── pool_shim.c           # LD_PRELOAD socket interceptor
+│   └── Makefile
+├── bridge/                   # TCP↔POOL migration bridge
+│   ├── pool_bridge.c         # Bidirectional TCP↔POOL proxy
+│   ├── pool_migrate.c        # Migration status and control tool
+│   └── Makefile
+├── vault/                    # Killer application
+│   ├── pool_vault.c          # Encrypted distributed file vault
+│   └── Makefile
+├── relay/                    # Operator incentive relay
+│   ├── pool_relay.c          # Relay daemon with generosity scoring
+│   └── Makefile
+├── windows/                  # (Future: Windows driver)
+├── common/                   # (Future: cross-platform code)
+└── tools/                    # (Future: additional tools)
 ```
 
 ## License
