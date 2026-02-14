@@ -1,0 +1,306 @@
+How to Write a Network Protocol That Will Absolutely, Guaranteed, 100% Stall
+=============================================================================
+A 26-Step Recipe for Failure, Derived from 18 Protocols That Did It Perfectly
+
+
+1. Compete Directly with TCP and UDP
+-------------------------------------
+Plant yourself at Layer 4 -- the exact spot where TCP and UDP have been entrenched
+for 40+ years. Don't build on top of them. Don't slide underneath them. Stand
+right next to them and ask the entire internet to choose you instead. Every stalled
+protocol did this. It's the foundation all other mistakes are built on.
+
+
+2. Start by Complaining About TCP
+----------------------------------
+Open your spec with a list of everything TCP does wrong. Byte streams have no
+message boundaries. There's no encryption. The handshake wastes resources. There's
+head-of-line blocking. IP addresses conflate identity with location. Reliability
+is all-or-nothing. There's no per-flow QoS. Make sure your motivation section reads
+like a grievance list. All 18 protocols did this. The complaints were correct. Nobody
+cared.
+
+
+3. Invent Message Boundaries Again
+------------------------------------
+Whatever else your protocol does, make sure it preserves message boundaries. This
+is the single most repeated feature across every stalled protocol. CurveCP, SST,
+DCCP, SCTP, XTP, IL, Minion, MinimaLT, UDP-Lite, MASQUE -- at least 10 of 18 did
+it. The internet has been asking for message-oriented transport since the 1990s and
+ignoring every protocol that offers it. Do it anyway.
+
+
+4. Write an Impeccable Specification
+-------------------------------------
+Publish your spec openly. Submit an Internet-Draft. Get it discussed at IETF
+meetings. Write an academic paper. Release it on your personal website. Format it
+beautifully. Make it thorough and precise. All 18 protocols did this. None were
+proprietary. None were hidden. Openness was universal and universally insufficient.
+The spec is not the problem. It was never the problem.
+
+
+5. Give It a Catchy Acronym
+----------------------------
+CurveCP. MinimaLT. SST. DCCP. SCTP. HIP. RSVP. XTP. NEAT. TAPS. MASQUE. Minion.
+Every stalled protocol had a memorable name. Branding was universal. Branding was
+irrelevant. Name yours something clever. It won't help, but tradition demands it.
+
+
+6. Don't Get a Corporate Sponsor
+---------------------------------
+This is critical. Under no circumstances should you get Google, Apple, Microsoft,
+or any browser vendor to ship your protocol in a product that reaches a billion
+users. Work on it solo like DJB (CurveCP). Make it an MIT thesis (SST). Fund it
+through an EU research grant (NEAT). Submit it as an IETF working group draft that
+no vendor feels urgency to implement (DCCP, SCTP, HIP, TAPS). QUIC succeeded
+because Google deployed it in Chrome and their servers simultaneously. Avoid this
+strategy at all costs.
+
+
+7. Require a New IP Protocol Number
+------------------------------------
+Register a new IP protocol number for your transport. Firewalls, NATs, load
+balancers, IDS/IPS systems, and every middlebox on the internet only understand
+protocol 6 (TCP) and protocol 17 (UDP). They drop everything else silently. DCCP,
+SCTP, and HIP all learned this. If you can't get a new protocol number, use UDP
+but make sure enterprise firewalls block your port anyway (CurveCP, MinimaLT, SST).
+If you absolutely must survive middleboxes, modify TCP's behavior and let middleboxes
+mangle your packets into corruption (Minion, tcpcrypt).
+
+
+8. Require Both Sides to Upgrade at the Same Time
+--------------------------------------------------
+Make sure your protocol provides zero value unless both endpoints support it. No
+graceful degradation. No partial benefit from unilateral deployment. No incremental
+migration path. tcpcrypt required kernel changes on both sides. HIP required changes
+to end-hosts AND middleboxes. RSVP required every router in the path to participate.
+The chicken-and-egg problem has killed more protocols than any technical deficiency.
+Embrace it.
+
+
+9. Let Someone Else Ship Your Ideas First
+------------------------------------------
+Take your time. Spend a decade refining the spec. While you do, let a well-funded
+competitor absorb your best ideas into something that actually ships:
+
+  Your Idea                    You Invented It         They Shipped It
+  ---------------------------  ----------------------  ---------------
+  Always-on encryption         CurveCP, MinimaLT       QUIC
+  0-RTT resumption             MinimaLT                QUIC, TLS 1.3
+  Stream multiplexing          SST, SCTP, MinimaLT     QUIC, HTTP/2
+  No head-of-line blocking     SST, SCTP               QUIC
+  Connection migration         CurveCP, MinimaLT, HIP  QUIC
+  Pluggable congestion ctrl    DCCP                     QUIC
+  DoS-resistant handshake      CurveCP, MinimaLT, SCTP QUIC
+  Message framing              Minion                   HTTP/2
+
+You do the research. They do the deployment. This is the natural order.
+
+
+10. Add Session State to Everything
+------------------------------------
+Even if you're building a datagram protocol, add connection semantics. Associations,
+sessions, base exchanges, cookie-based state, session resumption -- every stalled
+protocol did it. DCCP is explicitly "connection-oriented." SCTP calls them
+"associations." HIP has a "base exchange." CurveCP has cookie-based sessions. IL has
+reliable sessions. Pure connectionless transport is apparently unthinkable. Add state.
+Nobody will use it, but add it.
+
+
+11. Redesign the Handshake
+---------------------------
+TCP's 3-way handshake allocates server resources on SYN. Everyone knows this is wrong.
+So invent a new handshake:
+- Cookie-based with no server state (CurveCP)
+- 0-RTT with key caching (MinimaLT)
+- 4-way with cookie (SCTP)
+- 4-way with crypto (HIP)
+- 1 extra RTT for key exchange (tcpcrypt)
+- Feature negotiation at setup (DCCP)
+- Fast setup with minimal overhead (XTP)
+
+All seven converged on the same insight independently. All seven stalled independently.
+Invent your own variant. Add it to the pile.
+
+
+12. Use Diffie-Hellman for Key Exchange
+----------------------------------------
+If your protocol includes cryptography -- and it should, because the lack of
+encryption in TCP is on your grievance list -- use a Diffie-Hellman variant. CurveCP
+used Curve25519. MinimaLT used ephemeral DH. tcpcrypt used DH-based exchange. HIP
+used public-key DH. None used RSA key transport. None used pre-shared keys as
+primary. DH is the objectively correct choice. Make the objectively correct choice.
+It won't save you.
+
+
+13. Implement Forward Secrecy with Ephemeral Keys
+--------------------------------------------------
+Generate fresh keys per session. CurveCP, MinimaLT, tcpcrypt, and HIP all did this.
+No stalled protocol used long-term static keys for data encryption. Everyone
+understood PFS was mandatory. Everyone was right. Everyone still stalled. Be right
+too.
+
+
+14. Offer Configurable Reliability
+-----------------------------------
+Conclude that TCP's "fully reliable or nothing" model is wrong. Independently
+reinvent the concept of letting applications choose their reliability level. Six
+protocols did this:
+- Reliable + unreliable modes per-stream (SST)
+- Unreliable delivery with congestion control (DCCP)
+- Timed reliability / retransmission-limited (PR-SCTP)
+- Selective reliability per-message (XTP)
+- Accept partially corrupt data (UDP-Lite)
+- Ordered and unordered delivery per-stream (SCTP)
+
+This is the second most repeated feature after message orientation. Implement it.
+Nobody will switch.
+
+
+15. Innovate on Congestion Control
+-----------------------------------
+TCP's AIMD is primitive. You know it. Fix it:
+- Pluggable algorithms you can negotiate (DCCP)
+- Rate-based instead of window-based (XTP)
+- Shared across child streams (SST)
+- Per-association (SCTP)
+
+Each protocol proposed a different solution to the same problem. None of them got
+enough deployment to matter. Pick your favorite variant and add it.
+
+
+16. Solve the Mobility Problem
+-------------------------------
+IP addresses change when you move between networks. Sessions break. This is bad.
+Fix it:
+- Connections survive IP changes (CurveCP)
+- Sessions persist across address changes (MinimaLT)
+- Seamless handoff + multi-homing (HIP)
+- Multiple IPs per endpoint (SCTP)
+
+Four protocols solved this independently. Then QUIC added connection IDs and shipped
+it to every Chrome user on earth. Solve it a fifth time.
+
+
+17. Add DoS Resistance to the Handshake
+----------------------------------------
+Make the client prove it's real before the server spends resources. Use cookies
+(CurveCP, SCTP) or computational puzzles (MinimaLT). Three protocols arrived at this
+insight independently. Then QUIC added retry tokens and shipped it. Add your own
+variant.
+
+
+18. Ignore the Operational Layer Entirely
+------------------------------------------
+This one is unanimous. All 18 protocols focused exclusively on data transport and
+included zero operational features:
+- No configuration management
+- No change journaling or audit trails
+- No built-in telemetry beyond basic RTT
+- No automatic rollback
+- No configuration versioning
+
+Transport is where the intellectual prestige is. Operations is where the actual
+outages happen. Ignore operations. Every stalled protocol did.
+
+
+19. Build It During the Pre-QUIC Era
+-------------------------------------
+Time your work between 1990 and 2018. The 1990s produced XTP, IL, and RSVP. The
+2000s produced SCTP, DCCP, HIP, and SST. The 2010s produced CurveCP, MinimaLT,
+tcpcrypt, Minion, NEAT, TAPS, and MASQUE. All of them predated or ran concurrent
+with QUIC's development. None emerged after QUIC proved in 2021 that the only viable
+deployment strategy is "put it in a browser." If you're writing yours after 2021,
+you're breaking tradition, but you can still follow every other step.
+
+
+20. Don't Solve the Deployment Problem
+---------------------------------------
+Solve the technical problem. Don't solve the deployment problem. Don't include:
+- A migration strategy from TCP/IP
+- A shim or compatibility layer that works transparently
+- A killer application that forces adoption
+- An incentive structure for network operators
+
+tcpcrypt came closest by claiming "no application changes needed," but it still
+required kernel changes on both endpoints. Come close. Don't arrive.
+
+
+21. Find the Complexity Sweet Spot (It Doesn't Exist)
+------------------------------------------------------
+If your protocol is comprehensive, it dies of complexity:
+- XTP: "Over-engineered for its era"
+- HIP: "Complexity of deployment for marginal perceived benefit"
+- RSVP: "Operational complexity: requires universal deployment"
+
+If your protocol is simple, it dies of irrelevance:
+- UDP-Lite: Too niche
+- IL: Plan 9 only
+
+There is no sweet spot. Build it anyway.
+
+
+22. Build on Top of Another Stalled Protocol
+---------------------------------------------
+For bonus points, make your protocol depend on a protocol that already failed:
+- Multipath DCCP: Built on DCCP (barely deployed)
+- PR-SCTP: Built on SCTP (barely deployed)
+- DiffServ interworking: Built on RSVP/IntServ (abandoned)
+
+Stacking failure on failure is the most efficient route to failure.
+
+
+23. Require a New Socket API
+------------------------------
+Make every application on earth rewrite their networking code. SST explicitly
+"required applications to be rewritten for new API." TAPS and NEAT designed entire
+new abstract APIs. SCTP introduced SOCK_SEQPACKET. DCCP introduced SOCK_DCCP. Even
+tcpcrypt, which claimed transparency, added new kernel syscalls. The BSD socket API
+has been unchanged since 1983. It will outlive your protocol. Compete with it anyway.
+
+
+24. Write a Reference Implementation That No Product Uses
+----------------------------------------------------------
+Write clean, correct reference code. Put it on GitHub. Watch it collect stars and
+zero production deployments:
+- CurveCP: Reference code existed, no product shipped it
+- SCTP: Linux kernel implementation, used only by telephony and WebRTC internals
+- DCCP: Linux kernel implementation, effectively unused
+- tcpcrypt: Linux kernel patches, never mainlined
+
+Code is necessary. Code is not sufficient. Ship it nowhere.
+
+
+25. Solve Problems That Will Still Exist in 30 Years
+-----------------------------------------------------
+Make sure every problem you identify is real, documented, and still unsolved decades
+later:
+- TCP still has no built-in encryption
+- IP addresses still conflate identity and location
+- TCP is still all-or-nothing reliable
+- There's still no per-flow QoS on the public internet
+- There's still no reliable multicast standard
+- TCP still has head-of-line blocking outside of QUIC
+
+The problems are real. Your solutions are real. Nobody will deploy them. The problems
+will persist. Future protocol designers will cite them in their motivation sections.
+The cycle continues.
+
+
+26. Get It Right
+-----------------
+This is the final and most important step. Make sure your protocol is technically
+excellent. Make sure the cryptography is sound. Make sure the state machine is
+correct. Make sure the specification is unambiguous. Make sure the design addresses
+genuine deficiencies in the status quo.
+
+All 18 stalled protocols were technically sound solutions to real problems, specified
+publicly, that died because the internet's deployed infrastructure -- middleboxes,
+OS kernels, the BSD socket API, and forty years of application inertia -- is a
+stronger force than any specification.
+
+They all share the same DNA: Diffie-Hellman crypto, message orientation, session
+state, handshake innovation, flexible reliability, and death by ecosystem
+ossification.
+
+Get it right. It won't matter. But get it right.

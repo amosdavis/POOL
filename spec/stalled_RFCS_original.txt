@@ -1,0 +1,311 @@
+Commonalities Across All 18 Stalled/Expired/Abandoned Network Protocol Proposals
+=================================================================================
+
+1. Transport Layer Positioning
+------------------------------
+All 18 protocols operate at Layer 4 (transport) or the L3/L4 boundary. None are
+purely application-layer, link-layer, or physical-layer. Every one sits in the
+same architectural slot as TCP/UDP and competes for the same niche.
+
+2. Every One Identifies a Specific TCP/IP Deficiency
+-----------------------------------------------------
+Not a single protocol was invented in a vacuum. Each one begins from an explicit,
+documented problem with TCP, UDP, or IP:
+- TCP's byte-stream lacks message boundaries (CurveCP, SST, DCCP, SCTP, XTP, IL, Minion)
+- TCP has no encryption (CurveCP, MinimaLT, tcpcrypt)
+- TCP's handshake wastes resources (CurveCP, MinimaLT, SCTP)
+- TCP has head-of-line blocking (SST, SCTP)
+- IP addresses conflate identity with location (HIP)
+- TCP is all-or-nothing reliable (DCCP, PR-SCTP, XTP, UDP-Lite, SST)
+- No per-flow QoS in IP (RSVP, DiffServ interworking, XTP)
+
+Every protocol's stated motivation is a reaction to something TCP/IP does wrong.
+
+3. Message/Datagram Orientation
+-------------------------------
+The single most repeated feature across all 18. At least 10 protocols explicitly
+tried to add message boundaries that TCP lacks:
+- CurveCP, SST, DCCP, SCTP, XTP, IL, Minion (explicitly message-oriented)
+- MinimaLT (stream multiplexing implies framing)
+- UDP-Lite (datagram-native)
+- MASQUE (tunnels datagrams)
+
+This is the most universally desired missing feature from TCP.
+
+4. All Had Formal Public Specifications
+---------------------------------------
+Every single one produced a publicly available specification:
+- IETF Internet-Drafts: MinimaLT, tcpcrypt, Minion, TAPS, MASQUE, Multipath DCCP,
+  DiffServ interworking, PR-SCTP
+- Published RFCs (Experimental or Standard): DCCP (4340), SCTP (9260), HIP (7401/9063),
+  RSVP (2205), UDP-Lite (3828), tcpcrypt (8548), MASQUE (9297/9298)
+- Academic papers/standalone specs: CurveCP (DJB), SST (MIT SIGCOMM 2007), XTP, IL
+  (Plan 9), NEAT (EU)
+
+None were proprietary. All were open. Openness alone was insufficient.
+
+5. All Have Branded Acronyms or Short Names
+-------------------------------------------
+Every protocol named itself with a catchy, memorable identifier: CurveCP, MinimaLT,
+SST, tcpcrypt, DCCP, SCTP, HIP, RSVP, XTP, Minion, NEAT, TAPS, MASQUE, IL, PR-SCTP,
+UDP-Lite, IntServ, DiffServ. Marketing-style naming was universal and universally
+insufficient.
+
+6. Zero Achieved Widespread Deployment
+--------------------------------------
+This is the most absolute commonality. Not one reached critical mass:
+- Even those with ratified RFCs (SCTP, DCCP, UDP-Lite, HIP) saw minimal real-world use
+- Even those with kernel implementations (SCTP in Linux, DCCP in Linux, tcpcrypt patches)
+  stayed niche
+- Even those with partial deployment (SCTP in telephony signaling, MASQUE partial
+  standardization) never generalized
+
+7. No Adoption Champion
+-----------------------
+Not one had a major industry player (Google, Apple, Microsoft, a browser vendor)
+pushing deployment:
+- CurveCP: DJB solo effort
+- MinimaLT: Academic paper, no backer
+- SST: MIT thesis project
+- tcpcrypt: Small academic group
+- XTP: Military/research niche
+- IL: Bell Labs/Plan 9 internal
+- NEAT: EU-funded research project
+- TAPS: IETF working group with no implementer pressure
+- DCCP, SCTP, HIP: IETF RFCs with no product driving adoption
+
+Contrast with QUIC: Google shipped it in Chrome + their servers, creating instant
+deployment to billions of users. None of these 18 had that.
+
+8. Middlebox/NAT/Firewall Incompatibility
+------------------------------------------
+The majority were killed or severely hampered by network middleboxes that only pass
+TCP (port 80/443) and UDP:
+- New IP protocol numbers blocked: DCCP, SCTP, HIP (all use IP protocol numbers that
+  firewalls drop)
+- UDP-based but blocked: CurveCP, MinimaLT, SST
+- Modified TCP semantics mangled: Minion, tcpcrypt
+- Required middlebox upgrades: HIP, RSVP (every router in path)
+- Had to add UDP encapsulation as workaround: SCTP (RFC 6951), adding overhead and
+  complexity
+
+Only Minion and tcpcrypt were explicitly designed for middlebox survival, and even
+they failed.
+
+9. Required Both Endpoints to Upgrade Simultaneously
+-----------------------------------------------------
+Every protocol needed coordinated deployment -- both client and server must support
+it, or it falls back to nothing useful:
+- tcpcrypt: "Deployment required both endpoints to upgrade simultaneously"
+- HIP: "Requires changes at end-hosts AND potentially middleboxes"
+- RSVP: "Requires universal deployment to work"
+- This chicken-and-egg problem is universal to all 18
+
+No protocol solved the incremental/unilateral deployment problem.
+
+10. QUIC or TLS 1.3 Eventually Absorbed Their Key Innovation
+-------------------------------------------------------------
+At least 12 of the 18 had their primary contribution subsumed by QUIC or TLS 1.3:
+
+  Feature                      Original Protocol(s)               Absorbed By
+  ---------------------------  -----------------------------------  -----------
+  Always-on encryption         CurveCP, MinimaLT, tcpcrypt         QUIC
+  0-RTT resumption             MinimaLT                            QUIC, TLS 1.3
+  Stream multiplexing          SST, Minion, SCTP, MinimaLT         QUIC, HTTP/2
+  No head-of-line blocking     SST, SCTP                           QUIC
+  Connection migration         CurveCP, MinimaLT, HIP              QUIC
+  Pluggable congestion ctrl    DCCP                                 QUIC
+  DoS-resistant handshake      CurveCP, MinimaLT, SCTP             QUIC retry
+  Message framing              Minion                               HTTP/2
+
+The pioneers did the R&D; QUIC shipped the product.
+
+11. All Use Connection/Session Concepts
+---------------------------------------
+Even protocols designed for datagrams added session semantics:
+- DCCP: "connection-oriented" explicitly
+- CurveCP: cookie-based sessions
+- MinimaLT: sessions with resumption
+- SCTP: "associations" (their term for connections)
+- HIP: "base exchange" establishing identity binding
+- XTP: fast connection setup
+- IL: reliable sessions
+
+Pure connectionless transport (raw UDP) was not what any of them wanted. Every one
+added state.
+
+12. Handshake Innovation
+------------------------
+Nearly every protocol redesigned the handshake, and all tried to improve on TCP's
+3-way:
+- CurveCP: cookie-based, no server state until client proves receipt
+- MinimaLT: 0-RTT with key caching
+- SCTP: 4-way with cookie (INIT/INIT-ACK/COOKIE-ECHO/COOKIE-ACK)
+- HIP: 4-way "base exchange" with crypto
+- tcpcrypt: 1 extra RTT for key exchange
+- DCCP: feature negotiation at setup
+- XTP: "fast connection setup"
+
+All converged on the same insight: TCP's SYN allocates server resources too early.
+But each invented a different solution independently.
+
+13. Diffie-Hellman Key Exchange (Among Crypto Protocols)
+--------------------------------------------------------
+Every protocol that included cryptography used a Diffie-Hellman variant:
+- CurveCP: Curve25519 (ECDH)
+- MinimaLT: Ephemeral Diffie-Hellman
+- tcpcrypt: Key exchange (DH-based)
+- HIP: Public key-based exchange
+
+None used RSA key transport, pre-shared keys as primary, or anything exotic. DH was
+the universal choice.
+
+14. Forward Secrecy via Ephemeral Keys
+--------------------------------------
+Every crypto-enabled protocol generated fresh keys per session:
+- CurveCP: "Ephemeral keys per session"
+- MinimaLT: "Ephemeral Diffie-Hellman per connection"
+- tcpcrypt: Session-scoped keys
+- HIP: Per-association keys
+
+No protocol used long-term static keys for data encryption. All understood PFS was
+mandatory.
+
+15. Flexible Reliability as a Feature
+--------------------------------------
+Multiple protocols independently concluded that TCP's "fully reliable or nothing"
+model is wrong:
+- SST: "Reliable + unreliable modes per-stream"
+- DCCP: "Unreliable delivery with congestion control"
+- PR-SCTP: "Timed reliability / retransmission-limited"
+- XTP: "Selective reliability per-message"
+- UDP-Lite: "Accept partially corrupt data"
+- SCTP: "Ordered and unordered delivery per-stream"
+
+Six protocols independently reinvented configurable reliability. This is the second
+most repeated feature after message orientation.
+
+16. Congestion Control Innovation
+---------------------------------
+Multiple protocols tried to go beyond TCP's AIMD:
+- DCCP: Pluggable CCIDs (TCP-like CCID2 or TFRC CCID3)
+- XTP: Rate-based flow control (not window-based)
+- SST: Shared congestion control across child streams
+- SCTP: Per-association congestion control
+
+All recognized TCP's congestion control was insufficient but each proposed different
+solutions.
+
+17. Mobility/Multi-homing
+--------------------------
+Multiple protocols independently tried to decouple sessions from IP addresses:
+- CurveCP: "Connection survives IP address changes"
+- MinimaLT: "Sessions persist across IP address changes"
+- HIP: "Seamless handoff when IP address changes" + multi-homing
+- SCTP: Multi-homing with multiple IPs per endpoint
+
+Four protocols independently solving the same problem of mobile/multi-homed hosts.
+
+18. DoS/Flood Resistance
+-------------------------
+Three protocols independently invented proof-of-work or cookie-based DoS resistance:
+- CurveCP: "Cookie-based DoS protection"
+- MinimaLT: "Puzzle-based client proof-of-work"
+- SCTP: "Four-way handshake with cookie"
+
+All three arrived at the same insight: make the client prove it's real before the
+server spends resources.
+
+19. No Operational/Management Features
+--------------------------------------
+Not a single one included:
+- Configuration management
+- Change journaling or audit trails
+- Built-in telemetry beyond basic RTT
+- Automatic rollback
+- Configuration versioning
+
+All 18 focused exclusively on data transport. None crossed into the operational
+management plane. This is the gap POOL's spec identifies.
+
+20. All Span the Same Era (~1990-2018)
+--------------------------------------
+- 1990s: XTP, IL, RSVP/IntServ
+- 2000s: SCTP, DCCP, HIP, SST, DiffServ interworking
+- 2010s: CurveCP, MinimaLT, tcpcrypt, Minion, NEAT, TAPS, MASQUE, Multipath DCCP
+
+All predate or are contemporary with QUIC's standardization (RFC 9000, 2021). None
+emerged after QUIC proved that deployment via a major browser was the only viable path.
+
+21. All Failed to Solve Their Own Deployment Problem
+----------------------------------------------------
+Every protocol solved a technical problem but not the deployment problem. None included:
+- A migration strategy from TCP/IP
+- A "shim" or compatibility layer that worked transparently
+- A killer application that forced adoption
+- An incentive structure for network operators
+
+tcpcrypt came closest ("no application changes needed") but still needed OS kernel
+changes on both sides.
+
+22. Complexity vs. Adoption Inverse Relationship
+-------------------------------------------------
+The more comprehensive the protocol, the faster it died:
+- XTP: "Over-engineered for its era"
+- HIP: "Complexity of deployment for marginal perceived benefit"
+- RSVP: "Operational complexity: requires universal deployment"
+- DiffServ interworking: "Mapping complexity was never cleanly resolved"
+- NEAT: "Complexity of supporting many transports simultaneously"
+
+Meanwhile the simplest ones (UDP-Lite, IL) failed for the opposite reason -- too
+niche. There was no sweet spot.
+
+23. Built on Already-Stalled Foundations
+----------------------------------------
+Three protocols compounded failure by depending on other failed protocols:
+- Multipath DCCP -> built on DCCP (barely deployed)
+- PR-SCTP -> built on SCTP (barely deployed)
+- DiffServ interworking -> built on RSVP/IntServ (abandoned)
+
+Stacking on a failed protocol guaranteed failure.
+
+24. All Proposed New APIs or Socket Semantics
+---------------------------------------------
+Every protocol required applications to use something other than the BSD socket API:
+- SST: "Required applications to be rewritten for new API"
+- TAPS/NEAT: Explicitly designed new abstract APIs
+- SCTP: New socket types (SOCK_SEQPACKET)
+- DCCP: New socket type (SOCK_DCCP)
+- Even tcpcrypt, which claimed transparency, needed new kernel syscalls for session IDs
+
+The BSD socket API from 1983 outlived every challenger.
+
+25. All Solved Problems That Still Exist Today
+----------------------------------------------
+Every problem these protocols identified remains unsolved in mainstream deployment:
+- TCP still has no built-in encryption (relies on TLS above it)
+- IP addresses still conflate identity and location
+- TCP is still all-or-nothing reliable
+- There's still no per-flow QoS reservation on the public internet
+- There's still no reliable multicast transport standard
+- TCP still has head-of-line blocking (outside of QUIC)
+
+The problems were real. The solutions were real. The deployment path was not.
+
+26. None Had a Reference Implementation That Shipped in a Product
+-----------------------------------------------------------------
+- CurveCP: Reference code existed, no product used it
+- SCTP: Linux kernel implementation, used only by telephony (SS7/SIGTRAN) and WebRTC
+  internals
+- DCCP: Linux kernel implementation, effectively unused
+- tcpcrypt: Linux kernel patches, never mainlined
+- All others: academic prototypes or nothing
+
+Summary
+-------
+If you distill every commonality down to its core: all 18 are technically sound
+solutions to real problems, specified publicly, that died because the internet's
+deployed infrastructure (middleboxes + OS kernels + the BSD socket API + application
+inertia) is a stronger force than any specification. They all share the same DNA:
+DH-based crypto, message orientation, session state, handshake innovation, flexible
+reliability, and death by ecosystem ossification.
