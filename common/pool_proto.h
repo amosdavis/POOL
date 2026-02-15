@@ -3,6 +3,7 @@
  *
  * This header provides all protocol constants, packet formats, and
  * state machine definitions needed to implement POOL on any platform.
+ * Version: 1.0.0
  * It depends only on <stdint.h> and <stddef.h>.
  *
  * Platform-specific code (crypto, networking, memory) is abstracted
