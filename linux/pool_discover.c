@@ -98,8 +98,8 @@ static struct pool_peer *peer_find_or_create(uint32_t ip, uint16_t port)
             free_slot = i;
         /* Track oldest non-static peer for LRU eviction */
         if (peer_table[i].active && peer_table[i].source != 2 &&
-            peer_table[i].last_seen < oldest_time) {
-            oldest_time = peer_table[i].last_seen;
+            peer_table[i].last_seen_ns < oldest_time) {
+            oldest_time = peer_table[i].last_seen_ns;
             oldest_slot = i;
         }
     }

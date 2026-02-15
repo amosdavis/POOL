@@ -3,7 +3,7 @@
  *
  * Implements the pool_platform.h abstraction layer using:
  *
- *   - Crypto: Apple Security framework (CommonCrypto) + libsodium fallback
+ *   - Crypto: OpenSSL (EVP API for ChaCha20-Poly1305, X25519, HKDF)
  *   - Networking: BSD sockets (POSIX)
  *   - Threading: pthreads
  *   - Time: mach_absolute_time (macOS) / clock_gettime (FreeBSD)
