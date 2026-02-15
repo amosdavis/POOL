@@ -1,0 +1,39 @@
+Source: pool
+Section: net
+Priority: optional
+Maintainer: POOL Protocol Maintainers <pool-dev@example.com>
+Build-Depends: debhelper (>= 13), dh-dkms, dkms
+Standards-Version: 4.6.2
+Homepage: https://github.com/amosdavis/POOL
+
+Package: pool-dkms
+Architecture: all
+Depends: ${misc:Depends}, dkms, linux-headers-amd64 | linux-headers-generic | linux-headers-$(uname -r)
+Description: POOL kernel module (DKMS)
+ Protected Orchestrated Overlay Link — secure transport protocol
+ implemented as a Linux kernel module. Uses DKMS to automatically
+ build pool.ko for the running kernel on install and kernel upgrades.
+ .
+ Provides: IP Protocol 253 transport, ChaCha20-Poly1305 AEAD encryption,
+ X25519 ECDH key exchange, ML-KEM-768 post-quantum hybrid handshake,
+ multicast peer discovery, built-in telemetry, and atomic configuration.
+
+Package: pool-tools
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Recommends: pool-dkms
+Suggests: python3
+Description: POOL userspace tools and daemons
+ Userspace components for the POOL secure transport protocol:
+ .
+  * poolctl — CLI management tool
+  * poold — userspace daemon
+  * pool_bridge — TCP-to-POOL bridge proxy
+  * pool_migrate — gradual TCP→POOL migration tool
+  * pool_vault — encrypted distributed file vault
+  * pool_relay — relay daemon with operator incentives
+  * pool_test — protocol test harness
+  * libpool_shim.so — transparent POSIX socket shim (LD_PRELOAD)
+  * pool_exporter.py — Prometheus metrics exporter
+ .
+ Includes systemd service units for all daemons.

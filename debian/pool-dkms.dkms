@@ -1,0 +1,8 @@
+PACKAGE_NAME="pool"
+PACKAGE_VERSION="1.0.0"
+MAKE[0]="make -C ${dkms_tree}/${PACKAGE_NAME}/${PACKAGE_VERSION}/build/linux modules KDIR=/lib/modules/${kernelver}/build"
+CLEAN="make -C ${dkms_tree}/${PACKAGE_NAME}/${PACKAGE_VERSION}/build/linux clean"
+BUILT_MODULE_NAME[0]="pool"
+BUILT_MODULE_LOCATION[0]="linux/"
+DEST_MODULE_LOCATION[0]="/extra"
+AUTOINSTALL="yes"

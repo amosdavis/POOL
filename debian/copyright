@@ -1,0 +1,8 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: pool
+Source: https://github.com/amosdavis/POOL
+
+Files: *
+Copyright: 2026 POOL Protocol Authors
+License: proprietary
+ All rights reserved. See LICENSE file for details.

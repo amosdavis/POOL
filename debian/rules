@@ -1,0 +1,68 @@
+#!/usr/bin/make -f
+
+export DH_VERBOSE = 1
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+POOL_VERSION = 1.0.0
+DKMS_SRC = debian/pool-dkms/usr/src/pool-$(POOL_VERSION)
+TOOLS_DST = debian/pool-tools
+
+%:
+	dh $@ --with dkms
+
+override_dh_auto_build:
+	# Build userspace tools only — kernel module is built via DKMS at install time
+	$(MAKE) -C linux tools
+	$(MAKE) -C bridge
+	$(MAKE) -C shim
+	$(MAKE) -C relay
+	$(MAKE) -C vault
+
+override_dh_auto_install:
+	# Install DKMS kernel module source
+	install -d $(DKMS_SRC)/linux
+	install -d $(DKMS_SRC)/common
+	cp linux/*.c linux/*.h linux/Kbuild linux/Makefile $(DKMS_SRC)/linux/
+	cp common/*.h $(DKMS_SRC)/common/
+	install -m 644 linux/packaging/dkms.conf $(DKMS_SRC)/dkms.conf
+	# Install userspace binaries
+	install -d $(TOOLS_DST)/usr/sbin
+	install -m 755 linux/poolctl $(TOOLS_DST)/usr/sbin/poolctl
+	install -m 755 linux/poold $(TOOLS_DST)/usr/sbin/poold
+	install -m 755 linux/pool_test $(TOOLS_DST)/usr/sbin/pool_test
+	install -m 755 bridge/pool_bridge $(TOOLS_DST)/usr/sbin/pool_bridge
+	install -m 755 bridge/pool_migrate $(TOOLS_DST)/usr/sbin/pool_migrate
+	install -m 755 vault/pool_vault $(TOOLS_DST)/usr/sbin/pool_vault
+	install -m 755 relay/pool_relay $(TOOLS_DST)/usr/sbin/pool_relay
+	# Install shared library
+	install -d $(TOOLS_DST)/usr/lib
+	install -m 755 shim/libpool_shim.so $(TOOLS_DST)/usr/lib/libpool_shim.so
+	# Install Prometheus exporter
+	install -d $(TOOLS_DST)/usr/sbin
+	install -m 755 tools/pool_exporter.py $(TOOLS_DST)/usr/sbin/pool_exporter
+	# Install systemd units
+	install -d $(TOOLS_DST)/lib/systemd/system
+	install -m 644 linux/packaging/pool-module.service $(TOOLS_DST)/lib/systemd/system/
+	install -m 644 linux/packaging/poold.service $(TOOLS_DST)/lib/systemd/system/
+	install -m 644 linux/packaging/pool-bridge.service $(TOOLS_DST)/lib/systemd/system/
+	install -m 644 linux/packaging/pool-relay.service $(TOOLS_DST)/lib/systemd/system/
+	install -m 644 linux/packaging/pool-exporter.service $(TOOLS_DST)/lib/systemd/system/
+	# Install man pages
+	install -d $(TOOLS_DST)/usr/share/man/man8
+	install -m 644 linux/packaging/man/*.8 $(TOOLS_DST)/usr/share/man/man8/
+	# Install runtime directories
+	install -d $(TOOLS_DST)/var/lib/pool
+	install -d $(TOOLS_DST)/var/log/pool
+
+override_dh_auto_clean:
+	$(MAKE) -C linux clean || true
+	$(MAKE) -C bridge clean || true
+	$(MAKE) -C shim clean || true
+	$(MAKE) -C relay clean || true
+	$(MAKE) -C vault clean || true
+
+override_dh_dkms:
+	dh_dkms -p pool-dkms -V $(POOL_VERSION)
+
+override_dh_auto_test:
+	# Tests require a running kernel with pool module loaded — skip in build

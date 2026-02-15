@@ -1,0 +1,12 @@
+pool (1.0.0-1) unstable; urgency=medium
+
+  * Initial release.
+  * Kernel module: ChaCha20-Poly1305 AEAD, X25519 ECDH, ML-KEM-768 PQC,
+    IP Protocol 253 transport, multicast peer discovery, built-in telemetry,
+    atomic configuration with rollback, change journaling.
+  * Userspace tools: poolctl, poold, pool_bridge, pool_migrate, pool_vault,
+    pool_relay, pool_test, libpool_shim.so, pool_exporter.py.
+  * Systemd integration: 5 service units with dependency ordering.
+  * DKMS support: auto-rebuild on kernel upgrades.
+
+ -- POOL Protocol Maintainers <pool-dev@example.com>  Sat, 15 Feb 2026 20:00:00 +0000

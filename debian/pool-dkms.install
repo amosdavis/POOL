@@ -1,0 +1,3 @@
+linux/*.c linux/*.h linux/Kbuild linux/Makefile usr/src/pool-1.0.0/linux/
+common/*.h usr/src/pool-1.0.0/common/
+linux/packaging/dkms.conf usr/src/pool-1.0.0/

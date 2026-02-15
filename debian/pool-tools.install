@@ -1,0 +1,14 @@
+linux/poolctl usr/sbin/
+linux/poold usr/sbin/
+linux/pool_test usr/sbin/
+bridge/pool_bridge usr/sbin/
+bridge/pool_migrate usr/sbin/
+vault/pool_vault usr/sbin/
+relay/pool_relay usr/sbin/
+shim/libpool_shim.so usr/lib/
+tools/pool_exporter.py usr/sbin/
+linux/packaging/pool-module.service lib/systemd/system/
+linux/packaging/poold.service lib/systemd/system/
+linux/packaging/pool-bridge.service lib/systemd/system/
+linux/packaging/pool-relay.service lib/systemd/system/
+linux/packaging/pool-exporter.service lib/systemd/system/

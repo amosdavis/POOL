@@ -1,0 +1,6 @@
+linux/packaging/man/poolctl.8
+linux/packaging/man/poold.8
+linux/packaging/man/pool_bridge.8
+linux/packaging/man/pool_relay.8
+linux/packaging/man/pool_test.8
+linux/packaging/man/pool_vault.8
