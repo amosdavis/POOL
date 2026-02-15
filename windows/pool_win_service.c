@@ -221,7 +221,6 @@ static void handle_pipe_command(const struct pool_pipe_cmd *cmd,
 static DWORD WINAPI pipe_listener_thread(LPVOID param)
 {
     SECURITY_ATTRIBUTES sa;
-    SECURITY_DESCRIPTOR sd;
     PSECURITY_DESCRIPTOR psd = NULL;
     BOOL acl_ok = FALSE;
 

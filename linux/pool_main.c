@@ -12,6 +12,7 @@
 #include <linux/device.h>
 #include <linux/uaccess.h>
 #include <linux/slab.h>
+#include <linux/version.h>
 
 #include "pool_internal.h"
 
@@ -259,7 +260,12 @@ static int __init pool_init(void)
         return pool.major;
     }
 
+    /* class_create() lost the owner parameter in kernel 6.4 */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
+    pool.dev_class = class_create(POOL_DEV_NAME);
+#else
     pool.dev_class = class_create(THIS_MODULE, POOL_DEV_NAME);
+#endif
     if (IS_ERR(pool.dev_class)) {
         ret = PTR_ERR(pool.dev_class);
         goto err_class;

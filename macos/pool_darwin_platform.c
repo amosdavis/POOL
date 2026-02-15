@@ -40,6 +40,15 @@
 #include <CommonCrypto/CommonHMAC.h>
 #include <CommonCrypto/CommonRandom.h>
 #include <Security/Security.h>
+/*
+ * D01/D02: Crypto functions use OpenSSL EVP on all platforms (including
+ * Apple) for ChaCha20-Poly1305 and X25519. CommonCrypto is only used
+ * for HMAC-SHA256 and RNG where it is sufficient.
+ */
+#include <openssl/evp.h>
+#include <openssl/hmac.h>
+#include <openssl/rand.h>
+#include <openssl/kdf.h>
 #else
 /* FreeBSD/OpenBSD: use OpenSSL */
 #include <openssl/evp.h>

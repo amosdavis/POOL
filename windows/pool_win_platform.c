@@ -15,10 +15,10 @@
 
 #ifdef _WIN32
 
-#include <windows.h>
-#include <bcrypt.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h>
+#include <bcrypt.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -26,6 +26,24 @@
 
 #pragma comment(lib, "bcrypt.lib")
 #pragma comment(lib, "ws2_32.lib")
+
+/*
+ * MinGW headers may lack newer BCrypt algorithm identifiers.
+ * These are available at runtime on Windows 10 1903+ but the
+ * cross-compiler headers may not define the string constants.
+ */
+#ifndef BCRYPT_ECDH_ALGORITHM
+#define BCRYPT_ECDH_ALGORITHM           L"ECDH"
+#endif
+#ifndef BCRYPT_ECC_CURVE_NAME
+#define BCRYPT_ECC_CURVE_NAME           L"ECCCurveName"
+#endif
+#ifndef BCRYPT_ECC_CURVE_25519
+#define BCRYPT_ECC_CURVE_25519          L"curve25519"
+#endif
+#ifndef BCRYPT_CHACHA20_POLY1305_ALGORITHM
+#define BCRYPT_CHACHA20_POLY1305_ALGORITHM L"CHACHA20_POLY1305"
+#endif
 
 #include "../common/pool_proto.h"
 #include "../common/pool_platform.h"
@@ -598,7 +616,7 @@ static DWORD WINAPI pool_thread_wrapper(LPVOID param)
 }
 
 /* Thread-local storage for "should stop" flag */
-static __declspec(thread) pool_win_thread_t *tls_current_thread = NULL;
+static __thread pool_win_thread_t *tls_current_thread = NULL;
 
 int pool_thread_create(pool_thread_t *thread, int (*fn)(void *), void *arg)
 {
