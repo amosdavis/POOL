@@ -46,6 +46,8 @@ static long pool_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         if (copy_from_user(&port, (void __user *)arg, sizeof(port)))
             return -EFAULT;
         ret = pool_net_listen(port);
+        if (ret == 0)
+            pool_discover_start();
         break;
     }
     case POOL_IOC_CONNECT: {
@@ -216,6 +218,7 @@ static int __init pool_init(void)
 
     memset(&pool, 0, sizeof(pool));
     mutex_init(&pool.sessions_lock);
+    pool.transport_mode = POOL_TRANSPORT_AUTO;  /* try raw, fall back to TCP */
 
     /* Register char device */
     pool.major = register_chrdev(0, POOL_DEV_NAME, &pool_fops);
@@ -273,6 +276,7 @@ static int __init pool_init(void)
         goto err_sysinfo;
 
     pool_config_init();
+    pool_discover_init();
 
     pr_info("POOL: initialized, /dev/pool created (major=%d)\n", pool.major);
     return 0;
@@ -302,7 +306,9 @@ static void __exit pool_exit(void)
 
     pr_info("POOL: shutting down\n");
 
+    pool_discover_stop();
     pool_net_stop_listen();
+    pool_net_raw_cleanup();
 
     /* Flush workqueue before closing sessions to ensure no pending
      * work items reference session state during cleanup. */

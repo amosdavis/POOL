@@ -22,6 +22,8 @@ func TestFeatures(t *testing.T) {
 			InitializeShimScenario(ctx)
 			InitializeVaultScenario(ctx)
 			InitializeRelayScenario(ctx)
+			InitializeWindowsScenario(ctx)
+			InitializeDarwinScenario(ctx)
 		},
 		Options: &opts,
 	}

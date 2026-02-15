@@ -63,6 +63,7 @@ struct pool_rx_entry {
 struct pool_session {
     int      active;
     uint8_t  state;
+    uint8_t  transport;   /* POOL_TRANSPORT_TCP or POOL_TRANSPORT_RAW */
     uint8_t  session_id[POOL_SESSION_ID_SIZE];
     uint32_t peer_ip;
     uint16_t peer_port;
@@ -126,10 +127,13 @@ struct pool_state {
     struct device *dev_device;
 
     /* Listener */
-    struct socket *listen_sock;
+    struct socket *listen_sock;       /* TCP listener */
+    struct socket *raw_sock;          /* Raw IP proto 253 socket */
     struct task_struct *listen_thread;
+    struct task_struct *raw_listen_thread;
     uint16_t listen_port;
     int listening;
+    uint8_t transport_mode;           /* POOL_TRANSPORT_* */
 
     /* Sessions */
     struct pool_session sessions[POOL_MAX_SESSIONS];
@@ -212,6 +216,15 @@ int pool_net_recv_packet(struct pool_session *sess,
                          struct pool_header *hdr,
                          uint8_t *payload, int *payload_len);
 
+/* pool_net_raw.c — Raw IP protocol 253 transport */
+int pool_net_raw_init(void);
+void pool_net_raw_cleanup(void);
+int pool_net_raw_listen(void);
+void pool_net_raw_stop_listen(void);
+int pool_net_raw_connect(struct pool_session *sess, uint32_t ip);
+int pool_net_raw_send(struct pool_session *sess, void *buf, int len);
+int pool_net_raw_recv(struct pool_session *sess, void *buf, int len);
+
 /* pool_session.c */
 int pool_session_init(void);
 void pool_session_cleanup(void);
@@ -270,5 +283,30 @@ void pool_config_handle_rollback(struct pool_session *sess,
 void pool_config_check_deadline(struct pool_session *sess);
 void pool_config_confirm(struct pool_session *sess);
 uint32_t pool_config_version(void);
+
+/* pool_discover.c */
+void pool_discover_init(void);
+int pool_discover_start(void);
+void pool_discover_stop(void);
+void pool_discover_handle_exchange(struct pool_session *sess,
+                                   const uint8_t *payload, uint32_t plen);
+int pool_discover_build_exchange(uint8_t *buf, int max_len);
+int pool_discover_peer_count(void);
+
+/* pool_pqc.c — Post-quantum cryptography (ML-KEM-768 hybrid) */
+#define MLKEM_PUBKEY_SIZE   1184
+#define MLKEM_SECKEY_SIZE   2400
+#define MLKEM_CT_SIZE       1088
+#define MLKEM_SS_SIZE       32
+
+int pool_pqc_keygen(uint8_t *pk, uint8_t *sk);
+int pool_pqc_encaps(const uint8_t *pk, uint8_t *ct, uint8_t *ss);
+int pool_pqc_decaps(const uint8_t *sk, const uint8_t *ct, uint8_t *ss);
+int pool_pqc_hybrid_combine(const uint8_t *x25519_ss,
+                            const uint8_t *mlkem_ss,
+                            uint8_t *combined_ss);
+int pool_pqc_enabled(void);
+int pool_pqc_get_version(void);
+int pool_pqc_negotiate(int peer_version);
 
 #endif /* _POOL_INTERNAL_H */

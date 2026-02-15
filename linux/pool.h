@@ -18,6 +18,7 @@
 /* ---- Protocol Constants ---- */
 
 #define POOL_VERSION            1
+#define POOL_VERSION_PQC        2   /* hybrid X25519 + ML-KEM-768 */
 #define POOL_HEADER_SIZE        80
 #define POOL_HMAC_SIZE          32  /* SHA-256 */
 #define POOL_SESSION_ID_SIZE    16  /* 128-bit */
@@ -38,6 +39,12 @@
 #define POOL_PUZZLE_DIFFICULTY   8  /* bits of leading zeros (low for QEMU) */
 #define POOL_MAX_FRAGS          256
 #define POOL_FRAG_TIMEOUT_MS    5000
+#define POOL_IP_PROTO           253  /* IANA experimental protocol number */
+
+/* Transport modes */
+#define POOL_TRANSPORT_TCP      0    /* TCP overlay (default, works everywhere) */
+#define POOL_TRANSPORT_RAW      1    /* Raw IP protocol 253 */
+#define POOL_TRANSPORT_AUTO     2    /* Try raw first, fall back to TCP */
 
 /* ---- Packet Types (4 bits) ---- */
 

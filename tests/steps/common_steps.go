@@ -92,6 +92,15 @@ func CheckDmesg(pattern string) (bool, error) {
 	return strings.Contains(out, pattern), nil
 }
 
+// ReadFile reads the contents of a file and returns it as a string.
+func ReadFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
 // WaitForCondition polls a condition until it becomes true or times out.
 func WaitForCondition(timeout time.Duration, interval time.Duration, condition func() bool) bool {
 	deadline := time.Now().Add(timeout)

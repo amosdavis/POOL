@@ -1,7 +1,8 @@
 /*
  * pool_net.c - POOL Protocol network transport layer
  *
- * TCP-based transport (IP proto 253 not feasible in QEMU VMs).
+ * Dual transport: TCP overlay (default) and raw IP protocol 253.
+ * Transport mode is configurable: TCP, RAW, or AUTO (try raw, fall back to TCP).
  * Handles listener, raw send/recv, and POOL packet framing.
  */
 
@@ -379,11 +380,25 @@ int pool_net_listen(uint16_t port)
 
     pr_info("POOL: listening on port %d\n", port);
     pool_journal_add(POOL_JOURNAL_CONNECT, 0, 0, "listen", 6);
+
+    /* Start raw IP proto 253 listener if transport mode allows */
+    if (pool.transport_mode == POOL_TRANSPORT_RAW ||
+        pool.transport_mode == POOL_TRANSPORT_AUTO) {
+        int raw_ret = pool_net_raw_listen();
+        if (raw_ret && pool.transport_mode == POOL_TRANSPORT_RAW) {
+            pr_err("POOL: raw transport required but failed: %d\n", raw_ret);
+            pool_net_stop_listen();
+            return raw_ret;
+        }
+        /* AUTO mode: raw failure is non-fatal, TCP still works */
+    }
+
     return 0;
 }
 
 void pool_net_stop_listen(void)
 {
+    pool_net_raw_stop_listen();
     if (pool.listen_thread) {
         kthread_stop(pool.listen_thread);
         pool.listen_thread = NULL;
@@ -396,11 +411,26 @@ void pool_net_stop_listen(void)
     pool.listening = 0;
 }
 
-/* Connect to a peer (raw TCP, handshake done in pool_session.c) */
+/* Connect to a peer — uses raw IP 253 or TCP depending on transport mode */
 int pool_net_connect(struct pool_session *sess, uint32_t ip, uint16_t port)
 {
     struct sockaddr_in addr;
     int ret;
+
+    /* Try raw transport first if mode allows */
+    if (pool.transport_mode == POOL_TRANSPORT_RAW ||
+        pool.transport_mode == POOL_TRANSPORT_AUTO) {
+        ret = pool_net_raw_connect(sess, ip);
+        if (ret == 0)
+            return 0;
+        if (pool.transport_mode == POOL_TRANSPORT_RAW)
+            return ret;
+        /* AUTO mode: fall through to TCP */
+        pr_info("POOL: raw connect failed (%d), falling back to TCP\n", ret);
+    }
+
+    /* TCP transport */
+    sess->transport = POOL_TRANSPORT_TCP;
 
     ret = sock_create_kern(&init_net, AF_INET, SOCK_STREAM,
                            IPPROTO_TCP, &sess->sock);

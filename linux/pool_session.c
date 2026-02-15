@@ -105,6 +105,7 @@ void pool_session_free(struct pool_session *sess)
 
     sess->active = 0;
     sess->state = POOL_STATE_IDLE;
+    sess->transport = POOL_TRANSPORT_TCP;  /* default, overridden for raw */
     sess->bytes_sent = 0;
     sess->bytes_recv = 0;
     sess->packets_sent = 0;
@@ -248,8 +249,11 @@ static int pool_rx_thread_fn(void *data)
             break;
 
         case POOL_PKT_DISCOVER:
-            pool_mtu_handle_discover(sess, payload, plen,
-                                     be16_to_cpu(hdr.flags));
+            if (be16_to_cpu(hdr.flags) & POOL_FLAG_TELEMETRY)
+                pool_discover_handle_exchange(sess, payload, plen);
+            else
+                pool_mtu_handle_discover(sess, payload, plen,
+                                         be16_to_cpu(hdr.flags));
             break;
 
         case POOL_PKT_CONFIG:

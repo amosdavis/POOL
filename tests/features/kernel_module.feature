@@ -103,3 +103,61 @@ Feature: POOL Kernel Module Robustness
     When 100 packets are sent on the session
     Then the telemetry loss_rate_ppm is updated
     And the loss rate is a valid parts-per-million value
+
+  # 1.10 MEDIUM — Raw IP proto 253 transport
+  @medium
+  Scenario: Raw IP protocol 253 transport with TCP fallback
+    Given the POOL kernel module is loaded
+    And the transport mode is set to "auto"
+    When a POOL listener is started on port 9253
+    Then the listener accepts connections via TCP
+    And the raw IP proto 253 listener is started or skipped gracefully
+
+  # 1.11 MEDIUM — Peer discovery via multicast
+  @medium
+  Scenario: Peer discovery announces on multicast group
+    Given the POOL kernel module is loaded
+    When a POOL listener is started on port 9253
+    Then the peer discovery service is running
+    And the multicast group 239.253.0.1 is joined
+
+  @medium
+  Scenario: Discovered peers are added to peer table
+    Given the POOL kernel module is loaded
+    And a POOL listener is started on port 9253
+    When a peer announce is received from "192.168.1.10"
+    Then the peer table contains at least 1 peer
+    And the peer "192.168.1.10" has a valid public key
+
+  @medium
+  Scenario: Stale peers are expired after timeout
+    Given the POOL kernel module is loaded
+    And a POOL listener is started on port 9253
+    When a peer announce is received from "192.168.1.20"
+    And no announce is received for 120 seconds
+    Then the peer "192.168.1.20" is removed from the table
+
+  # 1.12 MEDIUM — Post-quantum hybrid key exchange
+  @medium
+  Scenario: Hybrid X25519 + ML-KEM-768 key exchange
+    Given the POOL kernel module is loaded
+    And post-quantum crypto is enabled
+    When a v2 handshake is initiated with a peer
+    Then the shared secret combines X25519 and ML-KEM components
+    And the session uses the hybrid shared secret
+
+  @medium
+  Scenario: Version negotiation falls back to v1
+    Given the POOL kernel module is loaded
+    And post-quantum crypto is enabled
+    When a peer responds with v1 CHALLENGE
+    Then the session falls back to X25519-only key exchange
+    And the connection is established successfully
+
+  @medium
+  Scenario: ML-KEM-768 encaps/decaps round-trip
+    Given the POOL kernel module is loaded
+    When an ML-KEM-768 keypair is generated
+    And encapsulation is performed with the public key
+    And decapsulation is performed with the secret key
+    Then both sides derive the same shared secret
