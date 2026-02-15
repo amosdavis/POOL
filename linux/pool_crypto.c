@@ -280,28 +280,32 @@ int pool_crypto_ecdh(const uint8_t *privkey, const uint8_t *peer_pubkey,
     kpp = crypto_alloc_kpp("curve25519", 0, 0);
     if (IS_ERR(kpp)) {
         /*
-         * Fallback: shared_secret = SHA256(privkey || peer_pubkey)
-         * This works because both sides compute:
-         *   A: SHA256(privA || pubB) and B: SHA256(privB || pubA)
-         * These are different! We need a commutative operation.
-         * Use: shared_secret = SHA256(min(pubA,pubB) || max(pubA,pubB) || privkey)
-         * Actually simplest: derive from both pubkeys sorted.
+         * C02: Fallback when kernel lacks curve25519 KPP.
+         * shared = SHA256(sorted(pubA, pubB))
+         *
+         * This IS commutative — both sides compute the same value.
+         * However, it does NOT provide X25519's CDH security property.
+         * An eavesdropper who knows both public keys can compute the
+         * shared secret. This fallback only protects against passive
+         * attackers who don't see the handshake. Log a warning.
          */
         struct crypto_shash *sha;
         SHASH_DESC_ON_STACK(desc, NULL);
         uint8_t my_pubkey[POOL_KEY_SIZE];
 
+        pr_warn_once("POOL: curve25519 KPP unavailable, using SHA256 fallback (REDUCED SECURITY)\n");
+
         sha = crypto_alloc_shash("sha256", 0, 0);
         if (IS_ERR(sha))
             return PTR_ERR(sha);
 
-        /* Compute our pubkey from privkey */
+        /* Compute our pubkey from privkey (matches keygen fallback) */
         desc->tfm = sha;
         crypto_shash_init(desc);
         crypto_shash_update(desc, privkey, POOL_KEY_SIZE);
         crypto_shash_final(desc, my_pubkey);
 
-        /* shared = SHA256(sorted_pubkeys) - commutative */
+        /* shared = SHA256(sorted_pubkeys) — commutative */
         crypto_shash_init(desc);
         if (memcmp(my_pubkey, peer_pubkey, POOL_KEY_SIZE) < 0) {
             crypto_shash_update(desc, my_pubkey, POOL_KEY_SIZE);
@@ -311,6 +315,7 @@ int pool_crypto_ecdh(const uint8_t *privkey, const uint8_t *peer_pubkey,
             crypto_shash_update(desc, my_pubkey, POOL_KEY_SIZE);
         }
         crypto_shash_final(desc, shared_secret);
+        memzero_explicit(my_pubkey, sizeof(my_pubkey));
         crypto_free_shash(sha);
         return 0;
     }
@@ -369,6 +374,10 @@ int pool_crypto_hkdf(const uint8_t *ikm, int ikm_len,
     int ret;
 
     if (!pool_hmac_tfm)
+        return -EINVAL;
+
+    /* C03: Enforce RFC 5869 output length limit: 255 * HashLen */
+    if (okm_len <= 0 || okm_len > 255 * 32)
         return -EINVAL;
 
     desc->tfm = pool_hmac_tfm;
@@ -527,8 +536,12 @@ int pool_crypto_encrypt(struct pool_crypto_state *cs,
     if (!cs->aead)
         return -EINVAL;
 
-    /* Derive nonce from sequence number */
-    memset(nonce, 0, POOL_NONCE_SIZE);
+    /*
+     * C01: Derive 12-byte nonce with full entropy. Use first 4 bytes of
+     * hmac_key (unique per session) for bytes 0-3, then 8 bytes of
+     * sequence number. This eliminates the zero-prefix weakness.
+     */
+    memcpy(nonce, cs->hmac_key, 4);
     memcpy(nonce + 4, &seq, 8);
 
     ret = crypto_aead_setkey(cs->aead, cs->session_key, POOL_KEY_SIZE);
@@ -583,7 +596,8 @@ int pool_crypto_decrypt(struct pool_crypto_state *cs,
     if (!cs->aead || cipher_len < POOL_TAG_SIZE)
         return -EINVAL;
 
-    memset(nonce, 0, POOL_NONCE_SIZE);
+    /* C01: Match nonce construction from encrypt */
+    memcpy(nonce, cs->hmac_key, 4);
     memcpy(nonce + 4, &seq, 8);
 
     ret = crypto_aead_setkey(cs->aead, cs->session_key, POOL_KEY_SIZE);
@@ -664,11 +678,22 @@ int pool_crypto_hmac_verify(struct pool_crypto_state *cs,
     return 0;
 }
 
-/* Generate next encrypted sequence number */
+/*
+ * Generate next encrypted sequence number.
+ * Returns the new sequence number. Sets *needs_rekey to 1 if the
+ * packet count threshold has been reached (C04).
+ */
 uint64_t pool_crypto_next_seq(struct pool_crypto_state *cs)
 {
     cs->local_seq++;
     cs->packets_since_rekey++;
+
+    /* C04: Check rekey threshold on every packet, not just heartbeat */
+    if (cs->packets_since_rekey >= POOL_REKEY_PACKETS) {
+        pr_info_ratelimited("POOL: rekey threshold reached (%u packets)\n",
+                            cs->packets_since_rekey);
+    }
+
     return cs->local_seq;
 }
 

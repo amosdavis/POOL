@@ -177,7 +177,8 @@ static int pool_raw_listen_thread_fn(void *data)
                 continue;
             }
 
-            /* Existing session — find by session_id */
+            /* N05: Existing session lookup — use sessions_lock for safety */
+            mutex_lock(&pool.sessions_lock);
             for (i = 0; i < POOL_MAX_SESSIONS; i++) {
                 struct pool_session *s = &pool.sessions[i];
                 if (!s->active)
@@ -186,6 +187,28 @@ static int pool_raw_listen_thread_fn(void *data)
                     continue;
                 if (memcmp(s->session_id, hdr->session_id,
                            POOL_SESSION_ID_SIZE) == 0) {
+                    /* N03: Validate source IP matches session peer */
+                    uint8_t src_mapped[16];
+                    pool_ipv4_to_mapped(src_ip, src_mapped);
+                    if (memcmp(s->peer_addr, src_mapped, 16) != 0) {
+                        pr_warn_ratelimited("POOL: raw: source IP mismatch for session %d\n", i);
+                        break;
+                    }
+
+                    /* N04: Limit RX queue depth to prevent memory exhaustion */
+                    {
+                        int queue_depth = 0;
+                        struct pool_rx_entry *tmp;
+                        spin_lock(&s->rx_lock);
+                        list_for_each_entry(tmp, &s->rx_queue, list)
+                            queue_depth++;
+                        spin_unlock(&s->rx_lock);
+                        if (queue_depth >= 4096) {
+                            pr_warn_ratelimited("POOL: raw: RX queue full for session %d\n", i);
+                            break;
+                        }
+                    }
+
                     /* Deliver to this session's RX queue */
                     struct pool_rx_entry *item;
                     item = kmalloc(sizeof(*item), GFP_KERNEL);
@@ -206,6 +229,7 @@ static int pool_raw_listen_thread_fn(void *data)
                     break;
                 }
             }
+            mutex_unlock(&pool.sessions_lock);
         }
     }
 

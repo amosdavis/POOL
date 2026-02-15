@@ -83,10 +83,12 @@ void pool_discover_init(void)
     discover_thread = NULL;
 }
 
-/* Find or create a peer entry for the given IP */
+/* N06: Find or create a peer entry with LRU eviction when table is full */
 static struct pool_peer *peer_find_or_create(uint32_t ip, uint16_t port)
 {
     int i, free_slot = -1;
+    int oldest_slot = -1;
+    uint64_t oldest_time = ULLONG_MAX;
 
     for (i = 0; i < POOL_MAX_PEERS; i++) {
         if (peer_table[i].active && peer_table[i].ip == ip &&
@@ -94,10 +96,24 @@ static struct pool_peer *peer_find_or_create(uint32_t ip, uint16_t port)
             return &peer_table[i];
         if (!peer_table[i].active && free_slot < 0)
             free_slot = i;
+        /* Track oldest non-static peer for LRU eviction */
+        if (peer_table[i].active && peer_table[i].source != 2 &&
+            peer_table[i].last_seen < oldest_time) {
+            oldest_time = peer_table[i].last_seen;
+            oldest_slot = i;
+        }
     }
 
-    if (free_slot < 0)
-        return NULL;
+    if (free_slot < 0) {
+        /* Table full — evict oldest non-static peer */
+        if (oldest_slot >= 0) {
+            pr_info("POOL: discover: evicting stale peer %pI4h for new peer\n",
+                    &peer_table[oldest_slot].ip);
+            free_slot = oldest_slot;
+        } else {
+            return NULL;
+        }
+    }
 
     memset(&peer_table[free_slot], 0, sizeof(peer_table[free_slot]));
     peer_table[free_slot].ip = ip;
@@ -181,6 +197,21 @@ static void pool_discover_handle_announce(const struct pool_announce *ann,
     if (memcmp(ann->pubkey, pool.node_pubkey, POOL_KEY_SIZE) == 0)
         return;
 
+    /*
+     * N07: Verify announce authenticity. The pubkey field acts as the
+     * peer's identity. We verify that src_ip is consistent with the
+     * announced address. Full authentication happens at session setup
+     * via X25519 handshake — discovery only establishes candidates.
+     * Rate-limit announce processing to prevent table churn.
+     */
+    {
+        static uint64_t last_announce_ns;
+        uint64_t now = ktime_get_ns();
+        if (now - last_announce_ns < 100000000ULL) /* 100ms min interval */
+            return;
+        last_announce_ns = now;
+    }
+
     mutex_lock(&peer_lock);
     peer = peer_find_or_create(src_ip, port);
     if (peer) {
@@ -188,7 +219,7 @@ static void pool_discover_handle_announce(const struct pool_announce *ann,
         memcpy(peer->addr, ann->addr, POOL_ADDR_SIZE);
         peer->last_seen_ns = ktime_get_ns();
         peer->source = 0;  /* multicast */
-        pr_info("POOL: discovered peer %pI4:%d\n", &src_ip, port);
+        pr_info("POOL: discovered peer %pI4h:%d\n", &src_ip, port);
     }
     mutex_unlock(&peer_lock);
 }

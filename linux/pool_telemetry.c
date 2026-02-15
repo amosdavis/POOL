@@ -69,6 +69,14 @@ void pool_telemetry_record_recv(struct pool_session *sess, uint32_t bytes)
 
 static int pool_heartbeat_fn(void *data)
 {
+    /*
+     * M05: Wait for subsystems to be ready. The heartbeat thread may
+     * start before session_init completes. Check that session array
+     * is initialized by waiting for sessions_lock to be valid.
+     */
+    while (!kthread_should_stop() && !pool.sessions_ready)
+        msleep(100);
+
     while (!kthread_should_stop()) {
         int i;
         for (i = 0; i < POOL_MAX_SESSIONS; i++) {

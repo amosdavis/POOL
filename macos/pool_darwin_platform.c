@@ -101,20 +101,11 @@ void pool_crypto_zeroize(void *buf, size_t len)
 int pool_crypto_x25519_keypair(uint8_t pub[POOL_KEY_SIZE],
                                uint8_t priv[POOL_KEY_SIZE])
 {
-#ifdef __APPLE__
-    /* Generate random private key with clamping */
-    if (pool_crypto_random(priv, POOL_KEY_SIZE) != 0)
-        return -1;
-    priv[0] &= 248;
-    priv[31] &= 127;
-    priv[31] |= 64;
-
-    /* Derive public key via SHA-256 (simplified; full Curve25519
-       scalar multiplication would require libsodium or custom code) */
-    CC_SHA256(priv, POOL_KEY_SIZE, pub);
-    return 0;
-#else
-    /* OpenSSL EVP_PKEY X25519 */
+    /*
+     * D02: Use OpenSSL EVP X25519 on all platforms including Apple.
+     * The previous CC_SHA256-based derivation was NOT real ECDH.
+     * Build with: -lcrypto (link OpenSSL/LibreSSL)
+     */
     EVP_PKEY_CTX *pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_X25519, NULL);
     EVP_PKEY *pkey = NULL;
     size_t len = POOL_KEY_SIZE;
@@ -137,28 +128,16 @@ out:
     EVP_PKEY_free(pkey);
     EVP_PKEY_CTX_free(pctx);
     return ret;
-#endif
 }
 
 int pool_crypto_x25519_shared(uint8_t shared[POOL_KEY_SIZE],
                               const uint8_t priv[POOL_KEY_SIZE],
                               const uint8_t peer_pub[POOL_KEY_SIZE])
 {
-#ifdef __APPLE__
-    /* Simplified: SHA-256(sorted_keys) — same as Linux fallback */
-    CC_SHA256_CTX ctx;
-    CC_SHA256_Init(&ctx);
-    if (memcmp(priv, peer_pub, POOL_KEY_SIZE) < 0) {
-        CC_SHA256_Update(&ctx, priv, POOL_KEY_SIZE);
-        CC_SHA256_Update(&ctx, peer_pub, POOL_KEY_SIZE);
-    } else {
-        CC_SHA256_Update(&ctx, peer_pub, POOL_KEY_SIZE);
-        CC_SHA256_Update(&ctx, priv, POOL_KEY_SIZE);
-    }
-    CC_SHA256_Final(shared, &ctx);
-    return 0;
-#else
-    /* OpenSSL X25519 ECDH */
+    /*
+     * D02: Use OpenSSL X25519 ECDH on all platforms including Apple.
+     * The previous SHA-256(sorted_keys) approach was NOT real ECDH.
+     */
     EVP_PKEY *our_key = EVP_PKEY_new_raw_private_key(EVP_PKEY_X25519, NULL,
                                                       priv, POOL_KEY_SIZE);
     EVP_PKEY *peer_key = EVP_PKEY_new_raw_public_key(EVP_PKEY_X25519, NULL,
@@ -184,7 +163,6 @@ out:
     EVP_PKEY_free(our_key);
     EVP_PKEY_free(peer_key);
     return ret;
-#endif
 }
 
 /* ---- Crypto: ChaCha20-Poly1305 AEAD ---- */
@@ -195,23 +173,11 @@ int pool_crypto_aead_encrypt(const uint8_t key[POOL_KEY_SIZE],
                              const uint8_t *plain, size_t plain_len,
                              uint8_t *cipher, uint8_t tag[POOL_TAG_SIZE])
 {
-#ifdef __APPLE__
-    /* Apple CommonCrypto doesn't have ChaCha20-Poly1305.
-       Use CCCryptorCreateWithMode with a custom approach, or
-       fall back to a bundled implementation.
-       For now, use a simplified XOR-based placeholder that MUST be
-       replaced with libsodium's crypto_aead_chacha20poly1305_ietf_encrypt
-       in production. */
-    /* TODO: Link against libsodium for real implementation */
-    CCHmac(kCCHmacAlgSHA256, key, POOL_KEY_SIZE, plain, plain_len, tag);
-    memcpy(cipher, plain, plain_len);
-    /* XOR with key-derived stream for basic confidentiality */
-    size_t i;
-    for (i = 0; i < plain_len; i++)
-        cipher[i] ^= key[i % POOL_KEY_SIZE] ^ nonce[i % POOL_NONCE_SIZE];
-    return 0;
-#else
-    /* OpenSSL EVP ChaCha20-Poly1305 */
+    /*
+     * D01: Use OpenSSL ChaCha20-Poly1305 on all platforms including Apple.
+     * The previous XOR+HMAC approach was NOT real AEAD.
+     * Build with: -lcrypto (link OpenSSL/LibreSSL)
+     */
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     int outl, ret = -1;
 
@@ -239,7 +205,6 @@ int pool_crypto_aead_encrypt(const uint8_t key[POOL_KEY_SIZE],
 out:
     EVP_CIPHER_CTX_free(ctx);
     return ret;
-#endif
 }
 
 int pool_crypto_aead_decrypt(const uint8_t key[POOL_KEY_SIZE],
@@ -249,22 +214,7 @@ int pool_crypto_aead_decrypt(const uint8_t key[POOL_KEY_SIZE],
                              const uint8_t tag[POOL_TAG_SIZE],
                              uint8_t *plain)
 {
-#ifdef __APPLE__
-    /* Reverse of the simplified encrypt */
-    memcpy(plain, cipher_in, cipher_len);
-    size_t i;
-    for (i = 0; i < cipher_len; i++)
-        plain[i] ^= key[i % POOL_KEY_SIZE] ^ nonce[i % POOL_NONCE_SIZE];
-    /* Verify tag */
-    uint8_t computed_tag[POOL_TAG_SIZE];
-    CCHmac(kCCHmacAlgSHA256, key, POOL_KEY_SIZE, plain, cipher_len,
-           computed_tag);
-    if (memcmp(computed_tag, tag, POOL_TAG_SIZE) != 0) {
-        pool_crypto_zeroize(plain, cipher_len);
-        return -1;
-    }
-    return 0;
-#else
+    /* D01: Use OpenSSL ChaCha20-Poly1305 on all platforms */
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     int outl, ret = -1;
 
@@ -292,7 +242,6 @@ int pool_crypto_aead_decrypt(const uint8_t key[POOL_KEY_SIZE],
 out:
     EVP_CIPHER_CTX_free(ctx);
     return ret;
-#endif
 }
 
 /* ---- Crypto: HMAC-SHA256 ---- */

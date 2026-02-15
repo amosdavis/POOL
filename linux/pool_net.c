@@ -267,13 +267,22 @@ int pool_net_recv_packet(struct pool_session *sess,
     {
         uint64_t remote_seq = be64_to_cpu(hdr->seq);
 
+        /* N02: Anti-replay window — reject duplicates and out-of-window */
+        if (remote_seq < sess->expected_remote_seq &&
+            sess->expected_remote_seq - remote_seq > 64) {
+            /* Packet too old — outside replay window, discard */
+            kfree(payload);
+            return;
+        }
+
         if (sess->expected_remote_seq > 0 &&
             remote_seq > sess->expected_remote_seq) {
             /* Sequence gap detected — count skipped seqs as lost */
             sess->packets_lost +=
                 remote_seq - sess->expected_remote_seq;
         }
-        sess->expected_remote_seq = remote_seq + 1;
+        if (remote_seq >= sess->expected_remote_seq)
+            sess->expected_remote_seq = remote_seq + 1;
         sess->crypto.remote_seq = remote_seq;
     }
 
@@ -469,6 +478,15 @@ int pool_net_connect(struct pool_session *sess, const uint8_t addr[16],
         sin->sin_addr.s_addr = htonl(pool_mapped_to_ipv4(addr));
         sin->sin_port = htons(port);
         slen = sizeof(struct sockaddr_in);
+    }
+
+    /* N01: Set connect timeout to prevent indefinite blocking */
+    {
+        struct __kernel_sock_timeval tv;
+        tv.tv_sec = 10;
+        tv.tv_usec = 0;
+        kernel_setsockopt(sess->sock->sk->sk_socket, SOL_SOCKET,
+                          SO_SNDTIMEO_NEW, (char *)&tv, sizeof(tv));
     }
 
     ret = kernel_connect(sess->sock, (struct sockaddr *)&saddr, slen, 0);

@@ -32,6 +32,7 @@ int pool_session_init(void)
         init_waitqueue_head(&s->rx_wait);
         INIT_LIST_HEAD(&s->rx_queue);
     }
+    pool.sessions_ready = 1;
     return 0;
 }
 
@@ -94,7 +95,9 @@ void pool_session_free(struct pool_session *sess)
     }
     spin_unlock(&sess->rx_lock);
 
-    /* Free fragment buffers */
+    /* S02: Free fragment buffers under rx_lock to prevent races
+     * with concurrent fragment reassembly in rx_thread */
+    spin_lock(&sess->rx_lock);
     {
         int i;
         for (i = 0; i < ARRAY_SIZE(sess->frags); i++) {
@@ -102,6 +105,7 @@ void pool_session_free(struct pool_session *sess)
             sess->frags[i].data = NULL;
         }
     }
+    spin_unlock(&sess->rx_lock);
 
     sess->active = 0;
     sess->state = POOL_STATE_IDLE;

@@ -368,3 +368,135 @@ widths accommodating the longer IPv6 address format.
 | DNS dependency | Separate service | Embedded peer discovery, no DNS needed |
 | Cascading failure | No backpressure | OVERLOAD signal + built-in flow control |
 | Change window risk | No auto-rollback | Deadline-based automatic rollback |
+
+### 13. Security Amendments (P01–P13)
+
+The following amendments address 13 protocol-level failure modes identified
+during comprehensive security analysis. All are normative requirements for
+compliant implementations.
+
+#### 13.1 Nonce Construction (P01)
+
+The 96-bit nonce for ChaCha20-Poly1305 MUST be constructed as:
+
+```
+nonce[0:3]  = hmac_key[0:4]   (session-unique prefix)
+nonce[4:11] = big-endian(seq)  (64-bit sequence number)
+```
+
+Implementations MUST trigger rekeying before the sequence counter reaches
+2^63 to prevent nonce reuse. After rekeying, the new hmac_key provides a
+fresh prefix, guaranteeing nonce uniqueness across key epochs.
+
+**Rationale:** Using zero bytes for nonce[0:3] (as in earlier drafts) reduces
+the effective nonce space by 32 bits, increasing collision probability across
+concurrent sessions.
+
+#### 13.2 Challenge Secret Rotation (P02)
+
+The server MUST rotate its challenge secret at least every 300 seconds
+(5 minutes). During rotation, the server MUST accept challenges generated
+with the previous secret for a grace period of 2× the rotation interval
+(10 minutes) to avoid rejecting in-flight handshakes.
+
+**Rationale:** Without rotation, captured challenge parameters could be
+solved offline and replayed indefinitely.
+
+#### 13.3 HMAC Verification Timing (P03)
+
+All HMAC verification MUST use constant-time comparison
+(`crypto_memneq` in kernel, `CRYPTO_memcmp` in userspace). Standard
+`memcmp` MUST NOT be used for any authentication tag or HMAC comparison.
+
+**Rationale:** Variable-time comparison leaks tag bytes via timing
+side-channels, enabling byte-by-byte forgery.
+
+#### 13.4 Fragment Resource Limits (P04)
+
+Implementations MUST enforce:
+- Maximum 16 concurrent fragment reassembly slots per peer
+- Maximum 5-second timeout per incomplete fragment sequence
+- LRU eviction when all fragment slots are occupied
+- Total fragment buffer memory capped at 16 × MTU per peer
+
+**Rationale:** Without limits, an attacker can exhaust reassembly memory
+with many small fragment sequences that are never completed.
+
+#### 13.5 MTU Probe Rate Limiting (P05)
+
+DISCOVER packets used for MTU probing MUST be rate-limited to at most
+1 probe per second per peer. Probe responses MUST only be accepted from
+peers with established sessions (authenticated by session HMAC).
+
+**Rationale:** Unauthenticated probes can be amplified by spoofing,
+causing exponential probe storms between peers.
+
+#### 13.6 Rekey Tie-Breaking (P06)
+
+When both peers initiate REKEY simultaneously, the peer with the
+lexicographically lower session_id MUST proceed as the rekey initiator.
+The other peer MUST abort its rekey attempt and process the received
+REKEY as a responder. Each rekey MUST include a monotonically increasing
+epoch number to disambiguate key material.
+
+**Rationale:** Without deterministic tie-breaking, both peers may use
+inconsistent key material for intermediate packets.
+
+#### 13.7 Config Rollback Semantics (P07)
+
+If no CONFIG_CONFIRM is received within the rollback deadline,
+implementations MUST treat silence as confirmation (not as failure).
+The CONFIG sender MUST retry the confirmation request at least 3 times
+with exponential backoff (1s, 2s, 4s) before the deadline expires.
+
+**Rationale:** An attacker who can suppress a single packet should not
+be able to force a rollback to a less secure configuration.
+
+#### 13.8 INIT Replay Protection (P10, P11)
+
+INIT packets MUST include a 64-bit nanosecond timestamp. The server
+MUST reject INIT packets with timestamps more than ±30 seconds from
+the server's current time. The puzzle difficulty MUST be at least 16
+(requiring 2^16 hash operations on average) to prevent free INIT spam.
+
+**Rationale:** Without timestamps, captured INIT packets can be replayed
+indefinitely. Without minimum difficulty, INIT→CHALLENGE spam has zero
+computational cost.
+
+#### 13.9 Version Downgrade Prevention (P13)
+
+After a successful v2 (hybrid post-quantum) handshake with a peer,
+implementations MUST record the peer's maximum supported version.
+Subsequent connections from that peer at a lower version MUST be
+rejected with a CLOSE packet containing error code VERSION_DOWNGRADE.
+
+**Rationale:** An active attacker could strip the v2 negotiation,
+forcing peers into v1 (X25519-only) mode which lacks post-quantum
+protection.
+
+#### 13.10 Compression Oracle Mitigation (P08)
+
+When the COMPRESSED flag (bit 1) is set, implementations SHOULD be
+aware that compression before encryption leaks plaintext information
+via ciphertext length (CRIME/BREACH-style attack). Applications
+handling secrets (passwords, tokens, keys) SHOULD either:
+1. Disable compression for sensitive channels, OR
+2. Pad compressed output to fixed block sizes (e.g., 256-byte blocks)
+
+**Rationale:** Compression ratio varies with plaintext content, leaking
+information through observable ciphertext sizes.
+
+#### 13.11 Address Checksum Collision Bound (P09)
+
+The CRC32 checksum used in POOL address derivation (§5) has a birthday
+bound of approximately 2^16 (~65,536) addresses before a 50% collision
+probability. For deployments exceeding 10,000 nodes, implementations
+SHOULD upgrade to a truncated SHA-256 (first 4 bytes) for address
+derivation in protocol v2+.
+
+#### 13.12 Anti-Replay Window (N02)
+
+Implementations MUST maintain a sliding window of at least 64 sequence
+numbers. Packets with sequence numbers older than (highest_seen - 64)
+MUST be silently discarded. Duplicate sequence numbers within the
+window MUST also be discarded.

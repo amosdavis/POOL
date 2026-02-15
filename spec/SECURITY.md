@@ -375,6 +375,44 @@ designed to prevent.
 **Long-term resolution:**
 
 - Develop POOL v2 with HMAC-SHA3-256 or KMAC-256 (SHA-3 based), or
+
+---
+
+## 8. Cipher Agility Roadmap (P12)
+
+POOL v1 uses a fixed cipher suite (ChaCha20-Poly1305 + X25519 + HMAC-SHA256).
+If any primitive is broken, the entire protocol must be replaced. This section
+defines the cipher agility roadmap for v2+.
+
+### 8.1 Cipher Suite Identifiers
+
+Future POOL versions MUST support negotiating cipher suites via a new
+CIPHER_SUITE field in the INIT packet. Proposed identifiers:
+
+| ID | AEAD | Key Exchange | MAC | Status |
+|----|------|-------------|-----|--------|
+| 0x01 | ChaCha20-Poly1305 | X25519 | HMAC-SHA256 | v1 (current) |
+| 0x02 | ChaCha20-Poly1305 | X25519 + ML-KEM-768 | HMAC-SHA256 | v2 (hybrid PQ) |
+| 0x03 | AES-256-GCM | X25519 + ML-KEM-768 | HMAC-SHA256 | v2 (alt AEAD) |
+| 0x04 | AES-256-GCM | X25519 | HMAC-SHA256 | v2 (AES fallback) |
+
+### 8.2 Negotiation Rules
+
+1. The client MUST include a list of supported cipher suite IDs in INIT
+2. The server MUST select the highest-ID mutually supported suite
+3. If no mutual suite exists, the server MUST reject with CLOSE (NO_CIPHER)
+4. After v2 handshake, downgrade to v1-only MUST be rejected (§13.9)
+
+### 8.3 Emergency Cipher Rotation
+
+If a critical break is discovered in ChaCha20-Poly1305:
+
+1. Deploy module update adding AES-256-GCM support (suite 0x03 or 0x04)
+2. Set `min_cipher_suite = 0x03` in config to disable broken suite
+3. Existing sessions complete normally; new sessions use safe suite
+4. After full fleet update, remove broken suite from supported list
+
+This ensures POOL can survive a primitive break without protocol shutdown.
   HMAC-BLAKE2b (if performance is a concern). The HKDF derivation function
   would also need to be updated from HKDF-SHA256 to HKDF with the
   replacement hash.

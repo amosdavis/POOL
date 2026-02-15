@@ -160,6 +160,7 @@ struct pool_state {
 
     /* Heartbeat */
     struct task_struct *heartbeat_thread;
+    int sessions_ready;  /* M05: Set after session subsystem initialized */
 
     /* Workqueue for async operations */
     struct workqueue_struct *wq;

@@ -40,11 +40,16 @@ static long pool_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
     int ret = 0;
 
+    /* M03: Prevent ioctl during module unload */
+    if (!try_module_get(THIS_MODULE))
+        return -ENODEV;
+
     switch (cmd) {
     case POOL_IOC_LISTEN: {
         uint16_t port;
-        if (copy_from_user(&port, (void __user *)arg, sizeof(port)))
-            return -EFAULT;
+        if (copy_from_user(&port, (void __user *)arg, sizeof(port))) {
+            ret = -EFAULT; goto out_put;
+        }
         ret = pool_net_listen(port);
         if (ret == 0)
             pool_discover_start();
@@ -52,8 +57,9 @@ static long pool_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
     }
     case POOL_IOC_CONNECT: {
         struct pool_connect_req req;
-        if (copy_from_user(&req, (void __user *)arg, sizeof(req)))
-            return -EFAULT;
+        if (copy_from_user(&req, (void __user *)arg, sizeof(req))) {
+            ret = -EFAULT; goto out_put;
+        }
         ret = pool_session_connect(req.peer_addr, req.addr_family,
                                    req.peer_port);
         break;
@@ -61,18 +67,22 @@ static long pool_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
     case POOL_IOC_SEND: {
         struct pool_send_req req;
         void *kdata;
-        if (copy_from_user(&req, (void __user *)arg, sizeof(req)))
-            return -EFAULT;
-        if (req.len > POOL_MAX_PAYLOAD || req.len == 0)
-            return -EINVAL;
-        if (req.session_idx >= POOL_MAX_SESSIONS)
-            return -EINVAL;
+        if (copy_from_user(&req, (void __user *)arg, sizeof(req))) {
+            ret = -EFAULT; goto out_put;
+        }
+        if (req.len > POOL_MAX_PAYLOAD || req.len == 0) {
+            ret = -EINVAL; goto out_put;
+        }
+        if (req.session_idx >= POOL_MAX_SESSIONS) {
+            ret = -EINVAL; goto out_put;
+        }
         kdata = kvmalloc(req.len, GFP_KERNEL);
-        if (!kdata)
-            return -ENOMEM;
+        if (!kdata) {
+            ret = -ENOMEM; goto out_put;
+        }
         if (copy_from_user(kdata, (void __user *)req.data_ptr, req.len)) {
             kvfree(kdata);
-            return -EFAULT;
+            ret = -EFAULT; goto out_put;
         }
         ret = pool_data_send(&pool.sessions[req.session_idx],
                              req.channel, kdata, req.len);
@@ -83,27 +93,31 @@ static long pool_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         struct pool_recv_req req;
         void *kdata;
         uint32_t got;
-        if (copy_from_user(&req, (void __user *)arg, sizeof(req)))
-            return -EFAULT;
-        if (req.len > POOL_MAX_PAYLOAD || req.len == 0)
-            return -EINVAL;
-        if (req.session_idx >= POOL_MAX_SESSIONS)
-            return -EINVAL;
+        if (copy_from_user(&req, (void __user *)arg, sizeof(req))) {
+            ret = -EFAULT; goto out_put;
+        }
+        if (req.len > POOL_MAX_PAYLOAD || req.len == 0) {
+            ret = -EINVAL; goto out_put;
+        }
+        if (req.session_idx >= POOL_MAX_SESSIONS) {
+            ret = -EINVAL; goto out_put;
+        }
         kdata = kvmalloc(req.len, GFP_KERNEL);
-        if (!kdata)
-            return -ENOMEM;
+        if (!kdata) {
+            ret = -ENOMEM; goto out_put;
+        }
         got = req.len;
         ret = pool_data_recv(&pool.sessions[req.session_idx],
                              req.channel, kdata, &got, 5000);
         if (ret == 0) {
             if (copy_to_user((void __user *)req.data_ptr, kdata, got)) {
                 kvfree(kdata);
-                return -EFAULT;
+                ret = -EFAULT; goto out_put;
             }
             req.len = got;
             if (copy_to_user((void __user *)arg, &req, sizeof(req))) {
                 kvfree(kdata);
-                return -EFAULT;
+                ret = -EFAULT; goto out_put;
             }
         }
         kvfree(kdata);
@@ -113,13 +127,15 @@ static long pool_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         struct pool_session_list list;
         struct pool_session_info *infos;
         uint32_t i, count = 0;
-        if (copy_from_user(&list, (void __user *)arg, sizeof(list)))
-            return -EFAULT;
+        if (copy_from_user(&list, (void __user *)arg, sizeof(list))) {
+            ret = -EFAULT; goto out_put;
+        }
         if (list.max_sessions > POOL_MAX_SESSIONS)
             list.max_sessions = POOL_MAX_SESSIONS;
         infos = kzalloc(sizeof(*infos) * list.max_sessions, GFP_KERNEL);
-        if (!infos)
-            return -ENOMEM;
+        if (!infos) {
+            ret = -ENOMEM; goto out_put;
+        }
         mutex_lock(&pool.sessions_lock);
         for (i = 0; i < POOL_MAX_SESSIONS && count < list.max_sessions; i++) {
             struct pool_session *s = &pool.sessions[i];
@@ -145,21 +161,23 @@ static long pool_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         if (copy_to_user((void __user *)list.info_ptr, infos,
                          sizeof(*infos) * count)) {
             kfree(infos);
-            return -EFAULT;
+            ret = -EFAULT; goto out_put;
         }
         if (copy_to_user((void __user *)arg, &list, sizeof(list))) {
             kfree(infos);
-            return -EFAULT;
+            ret = -EFAULT; goto out_put;
         }
         kfree(infos);
         break;
     }
     case POOL_IOC_CLOSE_SESS: {
         uint32_t idx;
-        if (copy_from_user(&idx, (void __user *)arg, sizeof(idx)))
-            return -EFAULT;
-        if (idx >= POOL_MAX_SESSIONS)
-            return -EINVAL;
+        if (copy_from_user(&idx, (void __user *)arg, sizeof(idx))) {
+            ret = -EFAULT; goto out_put;
+        }
+        if (idx >= POOL_MAX_SESSIONS) {
+            ret = -EINVAL; goto out_put;
+        }
         pool_session_close(&pool.sessions[idx]);
         break;
     }
@@ -169,13 +187,20 @@ static long pool_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
     case POOL_IOC_CHANNEL: {
         struct pool_channel_req creq;
         struct pool_session *s;
-        if (copy_from_user(&creq, (void __user *)arg, sizeof(creq)))
-            return -EFAULT;
-        if (creq.session_idx >= POOL_MAX_SESSIONS)
-            return -EINVAL;
+        if (copy_from_user(&creq, (void __user *)arg, sizeof(creq))) {
+            ret = -EFAULT; goto out_put;
+        }
+        if (creq.session_idx >= POOL_MAX_SESSIONS) {
+            ret = -EINVAL; goto out_put;
+        }
+        /* M02: Validate channel is within bounds */
+        if (creq.channel >= POOL_MAX_CHANNELS) {
+            ret = -EINVAL; goto out_put;
+        }
         s = &pool.sessions[creq.session_idx];
-        if (!s->active)
-            return -ENOENT;
+        if (!s->active) {
+            ret = -ENOENT; goto out_put;
+        }
         switch (creq.operation) {
         case POOL_CHAN_SUBSCRIBE:
             s->channel_subs[creq.channel / 8] |= (1 << (creq.channel % 8));
@@ -185,20 +210,25 @@ static long pool_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             break;
         case POOL_CHAN_LIST:
             if (copy_to_user((void __user *)creq.data_ptr,
-                             s->channel_subs, sizeof(s->channel_subs)))
-                return -EFAULT;
+                             s->channel_subs, sizeof(s->channel_subs))) {
+                ret = -EFAULT; goto out_put;
+            }
             creq.result = POOL_MAX_CHANNELS;
-            if (copy_to_user((void __user *)arg, &creq, sizeof(creq)))
-                return -EFAULT;
+            if (copy_to_user((void __user *)arg, &creq, sizeof(creq))) {
+                ret = -EFAULT; goto out_put;
+            }
             break;
         default:
-            return -EINVAL;
+            ret = -EINVAL; goto out_put;
         }
         break;
     }
     default:
         ret = -ENOTTY;
     }
+
+out_put:
+    module_put(THIS_MODULE);
     return ret;
 }
 
@@ -312,16 +342,19 @@ static void __exit pool_exit(void)
     pool_net_stop_listen();
     pool_net_raw_cleanup();
 
-    /* Flush workqueue before closing sessions to ensure no pending
-     * work items reference session state during cleanup. */
-    if (pool.wq)
-        flush_workqueue(pool.wq);
-
-    /* Close all sessions */
+    /*
+     * M01: Close sessions BEFORE flushing workqueue. Flushing first
+     * means pending work items reference live sessions, but those
+     * sessions are about to be freed. Close sessions first so no
+     * new work is generated, then flush remaining work safely.
+     */
     for (i = 0; i < POOL_MAX_SESSIONS; i++) {
         if (pool.sessions[i].active)
             pool_session_close(&pool.sessions[i]);
     }
+
+    if (pool.wq)
+        flush_workqueue(pool.wq);
 
     pool_sysinfo_cleanup();
     pool_telemetry_cleanup();

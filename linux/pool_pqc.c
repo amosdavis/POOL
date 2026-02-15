@@ -217,7 +217,9 @@ static void mlkem_cbd_eta2(struct mlkem_poly *p, const uint8_t *buf)
 {
     int i;
     for (i = 0; i < MLKEM_N / 8; i++) {
-        uint32_t t = *(const uint32_t *)(buf + 4 * i);
+        /* C05: Use memcpy for alignment-safe access on ARM/PowerPC */
+        uint32_t t;
+        memcpy(&t, buf + 4 * i, sizeof(t));
         uint32_t d = t & 0x55555555;
         d += (t >> 1) & 0x55555555;
         int j;
@@ -424,16 +426,22 @@ int pool_pqc_keygen(uint8_t *pk, uint8_t *sk)
     /* Append pk, H(pk), z for implicit reject (FIPS 203 §7.3) */
     memcpy(sk + MLKEM_K * MLKEM_POLYBYTES, pk, MLKEM_PUBKEY_SIZE);
     {
+        /* C07: Propagate SHA256 allocation failure */
         struct crypto_shash *sha = crypto_alloc_shash("sha256", 0, 0);
-        if (!IS_ERR(sha)) {
-            SHASH_DESC_ON_STACK(desc, sha);
-            desc->tfm = sha;
-            crypto_shash_init(desc);
-            crypto_shash_update(desc, pk, MLKEM_PUBKEY_SIZE);
-            crypto_shash_final(desc,
-                sk + MLKEM_K * MLKEM_POLYBYTES + MLKEM_PUBKEY_SIZE);
-            crypto_free_shash(sha);
+        if (IS_ERR(sha)) {
+            ret = PTR_ERR(sha);
+            goto out;
         }
+        SHASH_DESC_ON_STACK(desc, sha);
+        desc->tfm = sha;
+        ret = crypto_shash_init(desc);
+        if (ret) { crypto_free_shash(sha); goto out; }
+        ret = crypto_shash_update(desc, pk, MLKEM_PUBKEY_SIZE);
+        if (ret) { crypto_free_shash(sha); goto out; }
+        ret = crypto_shash_final(desc,
+            sk + MLKEM_K * MLKEM_POLYBYTES + MLKEM_PUBKEY_SIZE);
+        crypto_free_shash(sha);
+        if (ret) goto out;
     }
     get_random_bytes(sk + MLKEM_K * MLKEM_POLYBYTES +
                      MLKEM_PUBKEY_SIZE + MLKEM_SYMBYTES, MLKEM_SYMBYTES);
@@ -492,9 +500,12 @@ int pool_pqc_encaps(const uint8_t *pk, uint8_t *ct, uint8_t *ss)
     get_random_bytes(msg, MLKEM_SYMBYTES);
 
     /* The shared secret is a hash of the message */
-    pool_crypto_hkdf(msg, MLKEM_SYMBYTES,
+    /* C06: Propagate HKDF errors */
+    ret = pool_crypto_hkdf(msg, MLKEM_SYMBYTES,
                      (const uint8_t *)"mlkem-ss", 8,
                      ss, MLKEM_SS_SIZE);
+    if (ret)
+        goto out;
 
     /* Sample r, e1, e2 vectors */
     for (i = 0; i < MLKEM_K; i++) {
@@ -644,9 +655,12 @@ int pool_pqc_decaps(const uint8_t *sk, const uint8_t *ct, uint8_t *ss)
     }
 
     /* Shared secret = HKDF(msg) */
-    pool_crypto_hkdf(msg, MLKEM_SYMBYTES,
+    /* C06: Propagate HKDF errors */
+    ret = pool_crypto_hkdf(msg, MLKEM_SYMBYTES,
                      (const uint8_t *)"mlkem-ss", 8,
                      ss, MLKEM_SS_SIZE);
+    if (ret)
+        goto out;
 
 out:
     memzero_explicit(msg, sizeof(msg));

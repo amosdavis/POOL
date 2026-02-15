@@ -49,6 +49,10 @@ void pool_mtu_send_probe(struct pool_session *sess)
     if (sess->mtu_probing)
         return;
 
+    /* S06: Handle lo==hi edge case to prevent infinite loop */
+    if (sess->mtu_probe_hi <= sess->mtu_probe_lo)
+        return;  /* MTU discovery complete — range collapsed */
+
     if (sess->mtu_probe_hi - sess->mtu_probe_lo < POOL_MTU_CONVERGE_MARGIN)
         return;  /* converged */
 

@@ -54,10 +54,14 @@ struct pool_config_payload {
     uint16_t mtu_max;
 } __attribute__((packed));
 
-/* Per-session config state (stored in pool_state for simplicity) */
+/*
+ * S05: Global config is shared across all sessions. Protect with a
+ * mutex to prevent concurrent modification races.
+ */
 static struct pool_runtime_config current_config;
 static struct pool_runtime_config prev_config;
 static int config_tentative;  /* 1 if a tentative config is active */
+static DEFINE_MUTEX(config_lock);
 
 void pool_config_init(void)
 {
@@ -123,10 +127,13 @@ void pool_config_handle_config(struct pool_session *sess,
     memcpy(&pl, payload, sizeof(pl));
     payload_to_config(&pl, &proposed);
 
+    mutex_lock(&config_lock);
+
     /* Validate: version must be strictly increasing */
     if (proposed.version <= current_config.version) {
         pr_warn("POOL: CONFIG rejected: version %u <= current %u\n",
                 proposed.version, current_config.version);
+        mutex_unlock(&config_lock);
         return;
     }
 
@@ -134,6 +141,7 @@ void pool_config_handle_config(struct pool_session *sess,
     if (proposed.prev_version != current_config.version) {
         pr_warn("POOL: CONFIG rejected: prev_version %u != current %u\n",
                 proposed.prev_version, current_config.version);
+        mutex_unlock(&config_lock);
         return;
     }
 
@@ -143,6 +151,8 @@ void pool_config_handle_config(struct pool_session *sess,
     /* Apply tentatively */
     memcpy(&current_config, &proposed, sizeof(current_config));
     config_tentative = 1;
+
+    mutex_unlock(&config_lock);
 
     /* Update the session's telemetry config version */
     sess->telemetry.config_version = proposed.version;
@@ -163,8 +173,11 @@ void pool_config_handle_config(struct pool_session *sess,
 void pool_config_handle_rollback(struct pool_session *sess,
                                  const uint8_t *payload, uint32_t plen)
 {
+    mutex_lock(&config_lock);
+
     if (!config_tentative) {
         pr_warn("POOL: ROLLBACK received but no tentative config active\n");
+        mutex_unlock(&config_lock);
         return;
     }
 
@@ -174,6 +187,8 @@ void pool_config_handle_rollback(struct pool_session *sess,
     /* Restore previous configuration */
     memcpy(&current_config, &prev_config, sizeof(current_config));
     config_tentative = 0;
+
+    mutex_unlock(&config_lock);
 
     sess->telemetry.config_version = current_config.version;
 
@@ -190,27 +205,36 @@ void pool_config_check_deadline(struct pool_session *sess)
 {
     uint64_t now;
 
-    if (!config_tentative)
+    mutex_lock(&config_lock);
+    if (!config_tentative) {
+        mutex_unlock(&config_lock);
         return;
+    }
 
     now = ktime_get_ns();
     if (current_config.rollback_deadline_ns > 0 &&
         now >= current_config.rollback_deadline_ns) {
         pr_warn("POOL: config v%u deadline expired, auto-rollback\n",
                 current_config.version);
+        mutex_unlock(&config_lock);
         pool_config_handle_rollback(sess, NULL, 0);
+        return;
     }
+    mutex_unlock(&config_lock);
 }
 
 void pool_config_confirm(struct pool_session *sess)
 {
+    mutex_lock(&config_lock);
     if (!config_tentative) {
         pr_debug("POOL: config confirm but no tentative config\n");
+        mutex_unlock(&config_lock);
         return;
     }
 
     config_tentative = 0;
     current_config.rollback_deadline_ns = 0;
+    mutex_unlock(&config_lock);
 
     pr_info("POOL: config v%u confirmed\n", current_config.version);
     pool_journal_add(POOL_JOURNAL_CONFIG,

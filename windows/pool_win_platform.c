@@ -153,34 +153,87 @@ int pool_crypto_x25519_shared(uint8_t shared[POOL_KEY_SIZE],
                               const uint8_t priv[POOL_KEY_SIZE],
                               const uint8_t peer_pub[POOL_KEY_SIZE])
 {
-    /* Using BCrypt ECDH with Curve25519 for shared secret derivation.
-       If BCrypt doesn't support Curve25519, fall back to sorted-hash. */
-    BCRYPT_ALG_HANDLE sha_alg = NULL;
-    BCRYPT_HASH_HANDLE hash = NULL;
+    /*
+     * W02: Real X25519 ECDH via BCrypt. The previous SHA-256(sorted_keys)
+     * fallback was NOT real Diffie-Hellman — an eavesdropper could compute
+     * the same hash. Import our private key + peer public key and derive
+     * the shared secret via BCryptSecretAgreement.
+     */
+    BCRYPT_ALG_HANDLE alg = NULL;
+    BCRYPT_KEY_HANDLE our_key = NULL, peer_key_h = NULL;
+    BCRYPT_SECRET_HANDLE secret = NULL;
+    NTSTATUS status;
     int ret = -1;
 
-    /* Simplified fallback: SHA-256(sorted_keys) */
-    if (BCryptOpenAlgorithmProvider(&sha_alg, BCRYPT_SHA256_ALGORITHM,
-                                    NULL, 0) != 0)
+    status = BCryptOpenAlgorithmProvider(&alg, BCRYPT_ECDH_ALGORITHM,
+                                         NULL, 0);
+    if (!BCRYPT_SUCCESS(status))
         return -1;
 
-    if (BCryptCreateHash(sha_alg, &hash, NULL, 0, NULL, 0, 0) != 0) {
-        BCryptCloseAlgorithmProvider(sha_alg, 0);
-        return -1;
+    status = BCryptSetProperty(alg, BCRYPT_ECC_CURVE_NAME,
+                               (PUCHAR)BCRYPT_ECC_CURVE_25519,
+                               (ULONG)(wcslen(BCRYPT_ECC_CURVE_25519) + 1) *
+                               sizeof(WCHAR), 0);
+    if (!BCRYPT_SUCCESS(status))
+        goto out;
+
+    /* Import private key */
+    {
+        ULONG blob_size = sizeof(BCRYPT_ECCKEY_BLOB) + POOL_KEY_SIZE * 2;
+        PUCHAR blob = (PUCHAR)pool_alloc(blob_size);
+        if (!blob)
+            goto out;
+        BCRYPT_ECCKEY_BLOB *hdr = (BCRYPT_ECCKEY_BLOB *)blob;
+        hdr->dwMagic = BCRYPT_ECDH_PRIVATE_GENERIC_MAGIC;
+        hdr->cbKey = POOL_KEY_SIZE;
+        memcpy(blob + sizeof(BCRYPT_ECCKEY_BLOB), priv, POOL_KEY_SIZE);
+        memset(blob + sizeof(BCRYPT_ECCKEY_BLOB) + POOL_KEY_SIZE, 0, POOL_KEY_SIZE);
+        status = BCryptImportKeyPair(alg, NULL, BCRYPT_ECCPRIVATE_BLOB,
+                                     &our_key, blob, blob_size, 0);
+        pool_free(blob);
+        if (!BCRYPT_SUCCESS(status))
+            goto out;
     }
 
-    if (memcmp(priv, peer_pub, POOL_KEY_SIZE) < 0) {
-        BCryptHashData(hash, (PUCHAR)priv, POOL_KEY_SIZE, 0);
-        BCryptHashData(hash, (PUCHAR)peer_pub, POOL_KEY_SIZE, 0);
-    } else {
-        BCryptHashData(hash, (PUCHAR)peer_pub, POOL_KEY_SIZE, 0);
-        BCryptHashData(hash, (PUCHAR)priv, POOL_KEY_SIZE, 0);
+    /* Import peer public key */
+    {
+        ULONG blob_size = sizeof(BCRYPT_ECCKEY_BLOB) + POOL_KEY_SIZE;
+        PUCHAR blob = (PUCHAR)pool_alloc(blob_size);
+        if (!blob)
+            goto out;
+        BCRYPT_ECCKEY_BLOB *hdr = (BCRYPT_ECCKEY_BLOB *)blob;
+        hdr->dwMagic = BCRYPT_ECDH_PUBLIC_GENERIC_MAGIC;
+        hdr->cbKey = POOL_KEY_SIZE;
+        memcpy(blob + sizeof(BCRYPT_ECCKEY_BLOB), peer_pub, POOL_KEY_SIZE);
+        status = BCryptImportKeyPair(alg, NULL, BCRYPT_ECCPUBLIC_BLOB,
+                                     &peer_key_h, blob, blob_size, 0);
+        pool_free(blob);
+        if (!BCRYPT_SUCCESS(status))
+            goto out;
     }
-    if (BCRYPT_SUCCESS(BCryptFinishHash(hash, shared, POOL_KEY_SIZE, 0)))
-        ret = 0;
 
-    BCryptDestroyHash(hash);
-    BCryptCloseAlgorithmProvider(sha_alg, 0);
+    /* Derive shared secret */
+    status = BCryptSecretAgreement(our_key, peer_key_h, &secret, 0);
+    if (!BCRYPT_SUCCESS(status))
+        goto out;
+
+    {
+        ULONG derived_len = 0;
+        BCryptDeriveKey(secret, BCRYPT_KDF_RAW_SECRET, NULL,
+                        shared, POOL_KEY_SIZE, &derived_len, 0);
+        if (derived_len == POOL_KEY_SIZE)
+            ret = 0;
+    }
+
+out:
+    if (secret)
+        BCryptDestroySecret(secret);
+    if (peer_key_h)
+        BCryptDestroyKey(peer_key_h);
+    if (our_key)
+        BCryptDestroyKey(our_key);
+    if (alg)
+        BCryptCloseAlgorithmProvider(alg, 0);
     return ret;
 }
 
@@ -201,12 +254,26 @@ int pool_crypto_aead_encrypt(const uint8_t key[POOL_KEY_SIZE],
 
     status = BCryptOpenAlgorithmProvider(&alg, BCRYPT_CHACHA20_POLY1305_ALGORITHM,
                                          NULL, 0);
-    if (!BCRYPT_SUCCESS(status))
-        return -1;
-
-    status = BCryptSetProperty(alg, BCRYPT_CHAINING_MODE,
-                               (PUCHAR)BCRYPT_CHAIN_MODE_NA,
-                               sizeof(BCRYPT_CHAIN_MODE_NA), 0);
+    if (!BCRYPT_SUCCESS(status)) {
+        /*
+         * W01: ChaCha20-Poly1305 unavailable (pre-Windows 10 1903).
+         * Fall back to AES-256-GCM which is universally available.
+         * Both provide authenticated encryption with 128-bit tags.
+         */
+        status = BCryptOpenAlgorithmProvider(&alg, BCRYPT_AES_ALGORITHM,
+                                             NULL, 0);
+        if (!BCRYPT_SUCCESS(status))
+            return -1;
+        status = BCryptSetProperty(alg, BCRYPT_CHAINING_MODE,
+                                   (PUCHAR)BCRYPT_CHAIN_MODE_GCM,
+                                   sizeof(BCRYPT_CHAIN_MODE_GCM), 0);
+        if (!BCRYPT_SUCCESS(status))
+            goto out;
+    } else {
+        BCryptSetProperty(alg, BCRYPT_CHAINING_MODE,
+                          (PUCHAR)BCRYPT_CHAIN_MODE_NA,
+                          sizeof(BCRYPT_CHAIN_MODE_NA), 0);
+    }
 
     status = BCryptGenerateSymmetricKey(alg, &bkey, NULL, 0,
                                          (PUCHAR)key, POOL_KEY_SIZE, 0);
@@ -250,8 +317,18 @@ int pool_crypto_aead_decrypt(const uint8_t key[POOL_KEY_SIZE],
 
     status = BCryptOpenAlgorithmProvider(&alg, BCRYPT_CHACHA20_POLY1305_ALGORITHM,
                                          NULL, 0);
-    if (!BCRYPT_SUCCESS(status))
-        return -1;
+    if (!BCRYPT_SUCCESS(status)) {
+        /* W01: Fall back to AES-256-GCM on pre-1903 Windows */
+        status = BCryptOpenAlgorithmProvider(&alg, BCRYPT_AES_ALGORITHM,
+                                             NULL, 0);
+        if (!BCRYPT_SUCCESS(status))
+            return -1;
+        status = BCryptSetProperty(alg, BCRYPT_CHAINING_MODE,
+                                   (PUCHAR)BCRYPT_CHAIN_MODE_GCM,
+                                   sizeof(BCRYPT_CHAIN_MODE_GCM), 0);
+        if (!BCRYPT_SUCCESS(status))
+            goto out;
+    }
 
     status = BCryptGenerateSymmetricKey(alg, &bkey, NULL, 0,
                                          (PUCHAR)key, POOL_KEY_SIZE, 0);

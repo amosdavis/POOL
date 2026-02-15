@@ -25,6 +25,7 @@ func TestFeatures(t *testing.T) {
 			InitializeWindowsScenario(ctx)
 			InitializeDarwinScenario(ctx)
 			InitializeIPv6Scenario(ctx)
+			InitializeFailureModeScenario(ctx)
 		},
 		Options: &opts,
 	}
