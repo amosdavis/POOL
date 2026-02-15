@@ -24,6 +24,9 @@
 #define POOL_HANDSHAKE_TIMEOUT_SEC   10
 #define POOL_RESPONSE_TIMEOUT_SEC    30
 
+/* Forward declarations */
+static void pool_net_set_keepalive(struct socket *sock);
+
 /* ---- Raw socket helpers ---- */
 
 int pool_net_send_raw(struct socket *sock, void *buf, int len)
@@ -271,8 +274,7 @@ int pool_net_recv_packet(struct pool_session *sess,
         if (remote_seq < sess->expected_remote_seq &&
             sess->expected_remote_seq - remote_seq > 64) {
             /* Packet too old — outside replay window, discard */
-            kfree(payload);
-            return;
+            return -EINVAL;
         }
 
         if (sess->expected_remote_seq > 0 &&
@@ -434,7 +436,7 @@ int pool_net_connect(struct pool_session *sess, const uint8_t addr[16],
 {
     struct sockaddr_storage saddr;
     int ret, family;
-    socklen_t slen;
+    int slen;
 
     /* Try raw transport first if mode allows (IPv4 only for raw) */
     if (addr_family == AF_INET &&
@@ -483,10 +485,12 @@ int pool_net_connect(struct pool_session *sess, const uint8_t addr[16],
     /* N01: Set connect timeout to prevent indefinite blocking */
     {
         struct __kernel_sock_timeval tv;
+        sockptr_t optval;
         tv.tv_sec = 10;
         tv.tv_usec = 0;
-        kernel_setsockopt(sess->sock->sk->sk_socket, SOL_SOCKET,
-                          SO_SNDTIMEO_NEW, (char *)&tv, sizeof(tv));
+        optval = KERNEL_SOCKPTR(&tv);
+        sock_setsockopt(sess->sock, SOL_SOCKET,
+                        SO_SNDTIMEO_NEW, optval, sizeof(tv));
     }
 
     ret = kernel_connect(sess->sock, (struct sockaddr *)&saddr, slen, 0);

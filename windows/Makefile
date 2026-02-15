@@ -9,7 +9,7 @@
 
 CC ?= x86_64-w64-mingw32-gcc
 CFLAGS = -Wall -O2 -I../common
-LDFLAGS = -lbcrypt -lws2_32 -ladvapi32
+LDFLAGS = -municode -lbcrypt -lws2_32 -ladvapi32
 
 .PHONY: all clean
 
