@@ -61,6 +61,9 @@ override_dh_auto_clean:
 	$(MAKE) -C relay clean || true
 	$(MAKE) -C vault clean || true
 
+override_dh_install:
+	# Installation handled entirely by override_dh_auto_install
+
 override_dh_dkms:
 	dh_dkms -p pool-dkms -V $(POOL_VERSION)
 

@@ -8,7 +8,7 @@ Homepage: https://github.com/amosdavis/POOL
 
 Package: pool-dkms
 Architecture: all
-Depends: ${misc:Depends}, dkms, linux-headers-amd64 | linux-headers-generic | linux-headers-$(uname -r)
+Depends: ${misc:Depends}, dkms, linux-headers-amd64 | linux-headers-generic
 Description: POOL kernel module (DKMS)
  Protected Orchestrated Overlay Link — secure transport protocol
  implemented as a Linux kernel module. Uses DKMS to automatically
