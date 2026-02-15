@@ -18,6 +18,7 @@
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 
 #include "../linux/pool.h"
 
@@ -54,10 +55,17 @@ static void cmd_status(void)
         printf("%-4s %-16s %-6s %-12s %-12s %-10s\n",
                "IDX", "PEER", "PORT", "SENT(MB)", "RECV(MB)", "RTT(us)");
         for (i = 0; i < list.count; i++) {
-            struct in_addr a;
-            a.s_addr = htonl(infos[i].peer_ip);
-            printf("%-4u %-16s %-6u %-12.1f %-12.1f %-10llu\n",
-                   infos[i].index, inet_ntoa(a), infos[i].peer_port,
+            char addr_str[INET6_ADDRSTRLEN];
+            if (pool_addr_is_v4mapped(infos[i].peer_addr)) {
+                uint32_t ip4 = pool_mapped_to_ipv4(infos[i].peer_addr);
+                uint32_t nip = htonl(ip4);
+                inet_ntop(AF_INET, &nip, addr_str, sizeof(addr_str));
+            } else {
+                inet_ntop(AF_INET6, infos[i].peer_addr,
+                          addr_str, sizeof(addr_str));
+            }
+            printf("%-4u %-40s %-6u %-12.1f %-12.1f %-10llu\n",
+                   infos[i].index, addr_str, infos[i].peer_port,
                    (double)infos[i].bytes_sent / (1024*1024),
                    (double)infos[i].bytes_recv / (1024*1024),
                    (unsigned long long)(infos[i].telemetry.rtt_ns / 1000));
@@ -88,7 +96,6 @@ static void cmd_test(const char *ip, const char *port_str)
 {
     int pool_fd, ret;
     struct pool_connect_req req;
-    struct in_addr addr;
     uint32_t idx;
 
     pool_fd = open("/dev/pool", O_RDWR);
@@ -97,8 +104,13 @@ static void cmd_test(const char *ip, const char *port_str)
         return;
     }
 
-    if (!inet_aton(ip, &addr)) {
-        printf("FAIL: Invalid IP '%s'\n", ip);
+    struct addrinfo hints, *res;
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(ip, NULL, &hints, &res) != 0) {
+        printf("FAIL: Cannot resolve '%s'\n", ip);
         close(pool_fd);
         return;
     }
@@ -106,8 +118,17 @@ static void cmd_test(const char *ip, const char *port_str)
     printf("Testing POOL connectivity to %s:%s...\n", ip, port_str);
 
     memset(&req, 0, sizeof(req));
-    req.peer_ip = ntohl(addr.s_addr);
+    if (res->ai_family == AF_INET6) {
+        struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)res->ai_addr;
+        memcpy(req.peer_addr, &s6->sin6_addr, 16);
+        req.addr_family = AF_INET6;
+    } else {
+        struct sockaddr_in *s4 = (struct sockaddr_in *)res->ai_addr;
+        pool_ipv4_to_mapped(ntohl(s4->sin_addr.s_addr), req.peer_addr);
+        req.addr_family = AF_INET;
+    }
     req.peer_port = (uint16_t)atoi(port_str);
+    freeaddrinfo(res);
 
     ret = ioctl(pool_fd, POOL_IOC_CONNECT, &req);
     if (ret < 0) {

@@ -306,7 +306,8 @@ static int pool_rx_thread_fn(void *data)
 
 /* ---- Client-initiated handshake (INIT → CHALLENGE → RESPONSE) ---- */
 
-int pool_session_connect(uint32_t ip, uint16_t port)
+int pool_session_connect(const uint8_t peer_addr[16], uint8_t addr_family,
+                         uint16_t port)
 {
     struct pool_session *sess;
     struct pool_init_payload init_pl;
@@ -334,7 +335,7 @@ int pool_session_connect(uint32_t ip, uint16_t port)
                             sess->crypto.local_pubkey);
 
     /* TCP connect */
-    ret = pool_net_connect(sess, ip, port);
+    ret = pool_net_connect(sess, peer_addr, addr_family, port);
     if (ret) {
         pool_session_free(sess);
         return ret;
@@ -493,8 +494,8 @@ int pool_session_connect(uint32_t ip, uint16_t port)
         return -ENOMEM;
     }
 
-    pr_info("POOL: session %d established to %pI4h:%d\n",
-            sess_idx, &ip, port);
+    pr_info("POOL: session %d established to %pI6c:%d\n",
+            sess_idx, sess->peer_addr, port);
     pool_journal_add(POOL_JOURNAL_CONNECT, 0, 0, "connect", 7);
 
     /* Initiate MTU discovery */
@@ -559,7 +560,7 @@ int pool_session_accept(struct socket *client_sock)
     /* Generate puzzle (stateless: derived from client IP + rotating secret) */
     get_random_bytes(&sess->server_secret, sizeof(sess->server_secret));
     pool_crypto_gen_puzzle(chal_pl.puzzle_seed, sess->server_secret,
-                           sess->peer_ip);
+                           sess->peer_addr);
     chal_pl.puzzle_difficulty = cpu_to_be16(POOL_PUZZLE_DIFFICULTY);
     memcpy(chal_pl.server_pubkey, sess->crypto.local_pubkey, POOL_KEY_SIZE);
     memcpy(chal_pl.server_addr, &pool.node_addr, POOL_ADDR_SIZE);
@@ -678,18 +679,34 @@ int pool_session_accept(struct socket *client_sock)
         return -ENOMEM;
     }
 
-    /* Determine peer IP from socket */
+    /* Determine peer address from socket (dual-stack: may be IPv4-mapped) */
     {
-        struct sockaddr_in peer_addr;
+        struct sockaddr_storage peer_storage;
+        struct sockaddr_in *sin;
+        struct sockaddr_in6 *sin6;
+
         if (kernel_getpeername(client_sock,
-                               (struct sockaddr *)&peer_addr) == 0) {
-            sess->peer_ip = ntohl(peer_addr.sin_addr.s_addr);
-            sess->peer_port = ntohs(peer_addr.sin_port);
+                               (struct sockaddr *)&peer_storage) == 0) {
+            if (peer_storage.ss_family == AF_INET6) {
+                sin6 = (struct sockaddr_in6 *)&peer_storage;
+                memcpy(sess->peer_addr, &sin6->sin6_addr, 16);
+                sess->peer_port = ntohs(sin6->sin6_port);
+                sess->addr_family = AF_INET6;
+                /* Detect IPv4-mapped and downgrade addr_family */
+                if (pool_addr_is_v4mapped(sess->peer_addr))
+                    sess->addr_family = AF_INET;
+            } else {
+                sin = (struct sockaddr_in *)&peer_storage;
+                pool_ipv4_to_mapped(ntohl(sin->sin_addr.s_addr),
+                                    sess->peer_addr);
+                sess->peer_port = ntohs(sin->sin_port);
+                sess->addr_family = AF_INET;
+            }
         }
     }
 
-    pr_info("POOL: session %d accepted from %pI4h:%d\n",
-            sess_idx, &sess->peer_ip, sess->peer_port);
+    pr_info("POOL: session %d accepted from %pI6c:%d\n",
+            sess_idx, sess->peer_addr, sess->peer_port);
     pool_journal_add(POOL_JOURNAL_CONNECT, 0, 0, "accept", 6);
 
     /* Initiate MTU discovery */

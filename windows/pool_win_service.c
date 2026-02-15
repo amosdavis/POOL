@@ -18,6 +18,7 @@
 #ifdef _WIN32
 
 #include <windows.h>
+#include <sddl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -108,10 +109,22 @@ static void free_session(struct pool_win_session *sess)
 
 /* Handle a control pipe command */
 static void handle_pipe_command(const struct pool_pipe_cmd *cmd,
+                                DWORD bytes_read,
                                 struct pool_pipe_resp *resp)
 {
     resp->result = -1;
     resp->len = 0;
+
+    /* W04: Validate cmd.len against bytes actually read */
+    if (cmd->len > bytes_read - offsetof(struct pool_pipe_cmd, data)) {
+        pool_log_warn("pipe command len %u exceeds read %lu", cmd->len,
+                      (unsigned long)bytes_read);
+        return;
+    }
+    if (cmd->len > sizeof(cmd->data)) {
+        pool_log_warn("pipe command len %u exceeds data buffer", cmd->len);
+        return;
+    }
 
     switch (cmd->cmd) {
     case POOL_CMD_CONNECT: {
@@ -207,17 +220,37 @@ static void handle_pipe_command(const struct pool_pipe_cmd *cmd,
 /* Named pipe listener thread */
 static DWORD WINAPI pipe_listener_thread(LPVOID param)
 {
+    SECURITY_ATTRIBUTES sa;
+    SECURITY_DESCRIPTOR sd;
+    PSECURITY_DESCRIPTOR psd = NULL;
+    BOOL acl_ok = FALSE;
+
     (void)param;
+
+    /*
+     * W03: Create a DACL that restricts pipe access to SYSTEM and
+     * local Administrators only (prevents local DoS and privilege
+     * escalation via unprivileged pipe connections).
+     */
+    if (ConvertStringSecurityDescriptorToSecurityDescriptorA(
+            "D:(A;;GA;;;SY)(A;;GA;;;BA)",
+            SDDL_REVISION_1, &psd, NULL)) {
+        memset(&sa, 0, sizeof(sa));
+        sa.nLength = sizeof(sa);
+        sa.lpSecurityDescriptor = psd;
+        sa.bInheritHandle = FALSE;
+        acl_ok = TRUE;
+    }
 
     while (WaitForSingleObject(g_stop_event, 0) != WAIT_OBJECT_0) {
         HANDLE pipe = CreateNamedPipeW(
             POOL_PIPE_NAME,
             PIPE_ACCESS_DUPLEX,
             PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
-            PIPE_UNLIMITED_INSTANCES,
+            4,  /* limit to 4 concurrent instances instead of unlimited */
             sizeof(struct pool_pipe_resp),
             sizeof(struct pool_pipe_cmd),
-            5000, NULL);
+            5000, acl_ok ? &sa : NULL);
 
         if (pipe == INVALID_HANDLE_VALUE) {
             pool_log_error("CreateNamedPipe failed: %lu", GetLastError());
@@ -232,7 +265,7 @@ static DWORD WINAPI pipe_listener_thread(LPVOID param)
             DWORD bytes_read, bytes_written;
 
             if (ReadFile(pipe, &cmd, sizeof(cmd), &bytes_read, NULL)) {
-                handle_pipe_command(&cmd, &resp);
+                handle_pipe_command(&cmd, bytes_read, &resp);
                 WriteFile(pipe, &resp, sizeof(resp), &bytes_written, NULL);
             }
         }
@@ -240,6 +273,9 @@ static DWORD WINAPI pipe_listener_thread(LPVOID param)
         DisconnectNamedPipe(pipe);
         CloseHandle(pipe);
     }
+
+    if (psd)
+        LocalFree(psd);
     return 0;
 }
 

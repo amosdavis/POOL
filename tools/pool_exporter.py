@@ -44,7 +44,7 @@ def parse_sessions():
             result.append({
                 "idx": fields[0],
                 "state": fields[1],
-                "peer_ip": fields[2],
+                "peer_addr": fields[2],
                 "packets_sent": int(fields[3]),
                 "packets_recv": int(fields[4]),
                 "bytes_sent": int(fields[5]),
@@ -137,7 +137,7 @@ def format_prometheus():
 
         # Per-session metrics
         for sess in metrics.get("sessions", []):
-            labels = f'idx="{sess["idx"]}",peer="{sess["peer_ip"]}",state="{sess["state"]}"'
+            labels = f'idx="{sess["idx"]}",peer="{sess["peer_addr"]}",state="{sess["state"]}"'
 
             lines.append("# HELP pool_session_rtt_microseconds Session RTT")
             lines.append("# TYPE pool_session_rtt_microseconds gauge")

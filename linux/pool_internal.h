@@ -65,8 +65,9 @@ struct pool_session {
     uint8_t  state;
     uint8_t  transport;   /* POOL_TRANSPORT_TCP or POOL_TRANSPORT_RAW */
     uint8_t  session_id[POOL_SESSION_ID_SIZE];
-    uint32_t peer_ip;
+    uint8_t  peer_addr[16]; /* IPv4: stored as ::ffff:x.x.x.x */
     uint16_t peer_port;
+    uint8_t  addr_family;   /* AF_INET or AF_INET6 */
 
     struct socket *sock;
 
@@ -195,7 +196,7 @@ int pool_crypto_hmac_verify(struct pool_crypto_state *cs,
 int pool_crypto_init_session(struct pool_crypto_state *cs);
 void pool_crypto_cleanup_session(struct pool_crypto_state *cs);
 void pool_crypto_gen_puzzle(uint8_t *seed, uint64_t server_secret,
-                            uint32_t client_ip);
+                            const uint8_t client_addr[16]);
 int pool_crypto_verify_puzzle(const uint8_t *seed, const uint8_t *solution,
                               uint16_t difficulty);
 uint64_t pool_crypto_next_seq(struct pool_crypto_state *cs);
@@ -205,7 +206,8 @@ int pool_net_init(void);
 void pool_net_cleanup(void);
 int pool_net_listen(uint16_t port);
 void pool_net_stop_listen(void);
-int pool_net_connect(struct pool_session *sess, uint32_t ip, uint16_t port);
+int pool_net_connect(struct pool_session *sess, const uint8_t addr[16],
+                     uint8_t addr_family, uint16_t port);
 void pool_net_set_sock_rcvtimeo(struct socket *sock, int seconds);
 int pool_net_send_raw(struct socket *sock, void *buf, int len);
 int pool_net_recv_raw(struct socket *sock, void *buf, int len);
@@ -230,7 +232,8 @@ int pool_session_init(void);
 void pool_session_cleanup(void);
 struct pool_session *pool_session_alloc(void);
 void pool_session_free(struct pool_session *sess);
-int pool_session_connect(uint32_t ip, uint16_t port);
+int pool_session_connect(const uint8_t peer_addr[16], uint8_t addr_family,
+                         uint16_t port);
 int pool_session_accept(struct socket *client_sock);
 void pool_session_close(struct pool_session *sess);
 int pool_session_rekey(struct pool_session *sess);

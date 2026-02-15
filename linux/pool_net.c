@@ -15,6 +15,8 @@
 #include <linux/delay.h>
 #include <net/sock.h>
 #include <net/tcp.h>
+#include <linux/ipv6.h>
+#include <net/ipv6.h>
 #include <linux/sockptr.h>
 
 #include "pool_internal.h"
@@ -319,16 +321,18 @@ static int pool_listen_thread_fn(void *data)
 
 int pool_net_listen(uint16_t port)
 {
-    struct sockaddr_in addr;
-    int ret, opt = 1;
+    struct sockaddr_in6 addr6;
+    int ret, opt = 1, v6only = 0;
     sockptr_t optval = KERNEL_SOCKPTR(&opt);
+    sockptr_t v6optval = KERNEL_SOCKPTR(&v6only);
 
     if (pool.listening) {
         pr_info("POOL: already listening\n");
         return 0;
     }
 
-    ret = sock_create_kern(&init_net, AF_INET, SOCK_STREAM,
+    /* Create AF_INET6 dual-stack listener (accepts both IPv4 and IPv6) */
+    ret = sock_create_kern(&init_net, AF_INET6, SOCK_STREAM,
                            IPPROTO_TCP, &pool.listen_sock);
     if (ret) {
         pr_err("POOL: failed to create listen socket: %d\n", ret);
@@ -340,15 +344,19 @@ int pool_net_listen(uint16_t port)
     if (ret)
         pr_warn("POOL: SO_REUSEADDR failed: %d\n", ret);
 
+    /* IPV6_V6ONLY=0: accept both IPv4 and IPv6 connections */
+    sock_setsockopt(pool.listen_sock, SOL_IPV6, IPV6_V6ONLY,
+                    v6optval, sizeof(v6only));
+
     pool_net_set_keepalive(pool.listen_sock);
 
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    addr.sin_port = htons(port);
+    memset(&addr6, 0, sizeof(addr6));
+    addr6.sin6_family = AF_INET6;
+    addr6.sin6_addr = in6addr_any;
+    addr6.sin6_port = htons(port);
 
-    ret = kernel_bind(pool.listen_sock, (struct sockaddr *)&addr,
-                      sizeof(addr));
+    ret = kernel_bind(pool.listen_sock, (struct sockaddr *)&addr6,
+                      sizeof(addr6));
     if (ret) {
         pr_err("POOL: bind to port %d failed: %d\n", port, ret);
         sock_release(pool.listen_sock);
@@ -412,27 +420,34 @@ void pool_net_stop_listen(void)
 }
 
 /* Connect to a peer — uses raw IP 253 or TCP depending on transport mode */
-int pool_net_connect(struct pool_session *sess, uint32_t ip, uint16_t port)
+int pool_net_connect(struct pool_session *sess, const uint8_t addr[16],
+                     uint8_t addr_family, uint16_t port)
 {
-    struct sockaddr_in addr;
-    int ret;
+    struct sockaddr_storage saddr;
+    int ret, family;
+    socklen_t slen;
 
-    /* Try raw transport first if mode allows */
-    if (pool.transport_mode == POOL_TRANSPORT_RAW ||
-        pool.transport_mode == POOL_TRANSPORT_AUTO) {
-        ret = pool_net_raw_connect(sess, ip);
+    /* Try raw transport first if mode allows (IPv4 only for raw) */
+    if (addr_family == AF_INET &&
+        (pool.transport_mode == POOL_TRANSPORT_RAW ||
+         pool.transport_mode == POOL_TRANSPORT_AUTO)) {
+        uint32_t ip4 = pool_mapped_to_ipv4(addr);
+        ret = pool_net_raw_connect(sess, ip4);
         if (ret == 0)
             return 0;
         if (pool.transport_mode == POOL_TRANSPORT_RAW)
             return ret;
-        /* AUTO mode: fall through to TCP */
         pr_info("POOL: raw connect failed (%d), falling back to TCP\n", ret);
     }
 
     /* TCP transport */
     sess->transport = POOL_TRANSPORT_TCP;
 
-    ret = sock_create_kern(&init_net, AF_INET, SOCK_STREAM,
+    /* Determine socket family */
+    family = (addr_family == AF_INET6 && !pool_addr_is_v4mapped(addr))
+             ? AF_INET6 : AF_INET;
+
+    ret = sock_create_kern(&init_net, family, SOCK_STREAM,
                            IPPROTO_TCP, &sess->sock);
     if (ret) {
         pr_err("POOL: failed to create socket: %d\n", ret);
@@ -441,22 +456,32 @@ int pool_net_connect(struct pool_session *sess, uint32_t ip, uint16_t port)
 
     pool_net_set_keepalive(sess->sock);
 
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(ip);
-    addr.sin_port = htons(port);
+    memset(&saddr, 0, sizeof(saddr));
+    if (family == AF_INET6) {
+        struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)&saddr;
+        sin6->sin6_family = AF_INET6;
+        memcpy(&sin6->sin6_addr, addr, 16);
+        sin6->sin6_port = htons(port);
+        slen = sizeof(struct sockaddr_in6);
+    } else {
+        struct sockaddr_in *sin = (struct sockaddr_in *)&saddr;
+        sin->sin_family = AF_INET;
+        sin->sin_addr.s_addr = htonl(pool_mapped_to_ipv4(addr));
+        sin->sin_port = htons(port);
+        slen = sizeof(struct sockaddr_in);
+    }
 
-    ret = kernel_connect(sess->sock, (struct sockaddr *)&addr,
-                         sizeof(addr), 0);
+    ret = kernel_connect(sess->sock, (struct sockaddr *)&saddr, slen, 0);
     if (ret) {
-        pr_err("POOL: connect to %pI4h:%d failed: %d\n", &ip, port, ret);
+        pr_err("POOL: connect to %pI6c:%d failed: %d\n", addr, port, ret);
         sock_release(sess->sock);
         sess->sock = NULL;
         return ret;
     }
 
-    sess->peer_ip = ip;
+    memcpy(sess->peer_addr, addr, 16);
     sess->peer_port = port;
+    sess->addr_family = addr_family;
     return 0;
 }
 

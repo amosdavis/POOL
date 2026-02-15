@@ -146,9 +146,28 @@ int pool_data_handle_fragment(struct pool_session *sess,
     if (!fb) {
         /* Allocate a new reassembly buffer */
         if (free_slot < 0) {
-            pr_warn("POOL: no free fragment reassembly slot for msg_id=%u\n",
-                    msg_id);
-            return -ENOSPC;
+            /* S04: LRU eviction — evict oldest incomplete fragment */
+            unsigned long oldest_time = jiffies;
+            int oldest_slot = -1;
+            for (i = 0; i < ARRAY_SIZE(sess->frags); i++) {
+                if (sess->frags[i].data &&
+                    time_before(sess->frags[i].start_jiffies, oldest_time)) {
+                    oldest_time = sess->frags[i].start_jiffies;
+                    oldest_slot = i;
+                }
+            }
+            if (oldest_slot >= 0) {
+                pr_warn("POOL: evicting stale fragment msg_id=%u for new msg_id=%u\n",
+                        sess->frags[oldest_slot].msg_id, msg_id);
+                kfree(sess->frags[oldest_slot].data);
+                memset(&sess->frags[oldest_slot], 0,
+                       sizeof(sess->frags[oldest_slot]));
+                free_slot = oldest_slot;
+            } else {
+                pr_warn("POOL: no free fragment reassembly slot for msg_id=%u\n",
+                        msg_id);
+                return -ENOSPC;
+            }
         }
         fb = &sess->frags[free_slot];
         fb->data = kzalloc(total_len, GFP_KERNEL);
@@ -165,6 +184,13 @@ int pool_data_handle_fragment(struct pool_session *sess,
     if (fb->total_len != total_len) {
         pr_warn("POOL: fragment total_len mismatch msg_id=%u (%u vs %u)\n",
                 msg_id, fb->total_len, total_len);
+        return -EINVAL;
+    }
+
+    /* S03: Validate fragment bounds against allocated buffer size */
+    if (frag_offset + data_len > fb->total_len) {
+        pr_warn("POOL: fragment overflow msg_id=%u offset=%u len=%u total=%u\n",
+                msg_id, frag_offset, data_len, fb->total_len);
         return -EINVAL;
     }
 

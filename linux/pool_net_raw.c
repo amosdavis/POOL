@@ -42,7 +42,7 @@ int pool_net_raw_send(struct pool_session *sess, void *buf, int len)
 
     memset(&dst, 0, sizeof(dst));
     dst.sin_family = AF_INET;
-    dst.sin_addr.s_addr = htonl(sess->peer_ip);
+    dst.sin_addr.s_addr = htonl(pool_mapped_to_ipv4(sess->peer_addr));
 
     iov.iov_base = buf;
     iov.iov_len = len;
@@ -82,7 +82,8 @@ int pool_net_raw_recv(struct pool_session *sess, void *buf, int len)
 
     /* Capture source IP for session matching */
     if (sess && ret >= (int)sizeof(struct pool_header)) {
-        sess->peer_ip = ntohl(src.sin_addr.s_addr);
+        pool_ipv4_to_mapped(ntohl(src.sin_addr.s_addr), sess->peer_addr);
+        sess->addr_family = AF_INET;
     }
 
     return ret;
@@ -149,7 +150,8 @@ static int pool_raw_listen_thread_fn(void *data)
                     continue;
                 }
                 sess->transport = POOL_TRANSPORT_RAW;
-                sess->peer_ip = src_ip;
+                pool_ipv4_to_mapped(src_ip, sess->peer_addr);
+                sess->addr_family = AF_INET;
                 sess->peer_port = 0;  /* raw has no port */
                 sess->sock = pool.raw_sock;
 
@@ -278,7 +280,8 @@ int pool_net_raw_connect(struct pool_session *sess, uint32_t ip)
 
     sess->transport = POOL_TRANSPORT_RAW;
     sess->sock = pool.raw_sock;  /* shared raw socket */
-    sess->peer_ip = ip;
+    pool_ipv4_to_mapped(ip, sess->peer_addr);
+    sess->addr_family = AF_INET;
     sess->peer_port = 0;
 
     return 0;

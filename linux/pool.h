@@ -30,6 +30,30 @@
 #define POOL_LISTEN_BACKLOG     128
 #define POOL_DEFAULT_MTU        1400
 #define POOL_MIN_MTU            512
+
+/* IPv4-mapped IPv6 address helpers: ::ffff:x.x.x.x */
+static inline void pool_ipv4_to_mapped(uint32_t ip4, uint8_t addr[16])
+{
+    __builtin_memset(addr, 0, 10);
+    addr[10] = 0xFF;
+    addr[11] = 0xFF;
+    addr[12] = (ip4 >> 24) & 0xFF;
+    addr[13] = (ip4 >> 16) & 0xFF;
+    addr[14] = (ip4 >> 8) & 0xFF;
+    addr[15] = ip4 & 0xFF;
+}
+
+static inline uint32_t pool_mapped_to_ipv4(const uint8_t addr[16])
+{
+    return ((uint32_t)addr[12] << 24) | ((uint32_t)addr[13] << 16) |
+           ((uint32_t)addr[14] << 8) | (uint32_t)addr[15];
+}
+
+static inline int pool_addr_is_v4mapped(const uint8_t addr[16])
+{
+    static const uint8_t prefix[12] = {0,0,0,0, 0,0,0,0, 0,0,0xFF,0xFF};
+    return __builtin_memcmp(addr, prefix, 12) == 0;
+}
 #define POOL_HEARTBEAT_SEC      5
 #define POOL_REKEY_PACKETS      ((uint32_t)1 << 28)  /* rekey every 256M pkts */
 #define POOL_REKEY_SEC          3600  /* or every hour */
@@ -171,9 +195,10 @@ struct pool_journal_entry {
 
 /* Connect to a remote POOL node */
 struct pool_connect_req {
-    uint32_t peer_ip;
+    uint8_t  peer_addr[16]; /* IPv4: stored as ::ffff:x.x.x.x (IPv4-mapped) */
     uint16_t peer_port;
-    uint16_t reserved;
+    uint8_t  addr_family;   /* AF_INET or AF_INET6 */
+    uint8_t  reserved[5];
 };
 
 /* Send data on a session */
@@ -199,10 +224,10 @@ struct pool_recv_req {
 /* Query session info */
 struct pool_session_info {
     uint32_t index;
-    uint32_t peer_ip;
+    uint8_t  peer_addr[16]; /* IPv4: stored as ::ffff:x.x.x.x (IPv4-mapped) */
     uint16_t peer_port;
+    uint8_t  addr_family;   /* AF_INET or AF_INET6 */
     uint8_t  state;
-    uint8_t  reserved;
     uint8_t  session_id[POOL_SESSION_ID_SIZE];
     uint64_t bytes_sent;
     uint64_t bytes_recv;

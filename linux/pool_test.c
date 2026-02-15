@@ -16,6 +16,7 @@
 #include <unistd.h>
 #include <time.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
 #include <errno.h>
@@ -148,7 +149,7 @@ static void cmd_client(int argc, char **argv)
 {
     struct pool_connect_req creq;
     struct pool_send_req sreq;
-    struct in_addr addr;
+    struct addrinfo hints, *res;
     uint16_t port;
     uint32_t mb = 500;
     uint64_t total_bytes;
@@ -159,12 +160,15 @@ static void cmd_client(int argc, char **argv)
     int ret;
 
     if (argc < 4) {
-        fprintf(stderr, "Usage: pool_test client <ip> <port> [mb]\n");
+        fprintf(stderr, "Usage: pool_test client <ip|host> <port> [mb]\n");
         return;
     }
 
-    if (!inet_aton(argv[2], &addr)) {
-        fprintf(stderr, "Invalid IP: %s\n", argv[2]);
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(argv[2], NULL, &hints, &res) != 0) {
+        fprintf(stderr, "Cannot resolve: %s\n", argv[2]);
         return;
     }
     port = (uint16_t)atoi(argv[3]);
@@ -175,8 +179,17 @@ static void cmd_client(int argc, char **argv)
 
     /* Connect */
     memset(&creq, 0, sizeof(creq));
-    creq.peer_ip = ntohl(addr.s_addr);
+    if (res->ai_family == AF_INET6) {
+        struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)res->ai_addr;
+        memcpy(creq.peer_addr, &s6->sin6_addr, 16);
+        creq.addr_family = AF_INET6;
+    } else {
+        struct sockaddr_in *s4 = (struct sockaddr_in *)res->ai_addr;
+        pool_ipv4_to_mapped(ntohl(s4->sin_addr.s_addr), creq.peer_addr);
+        creq.addr_family = AF_INET;
+    }
     creq.peer_port = port;
+    freeaddrinfo(res);
 
     ret = ioctl(pool_fd, POOL_IOC_CONNECT, &creq);
     if (ret < 0) {

@@ -74,10 +74,12 @@ struct pool_shim_fd {
     int session_idx;        /* POOL session index (-1 if not connected) */
     int is_listener;        /* 1 if this is a listening socket */
     int real_fd;            /* the original socket fd (kept for fallback) */
-    uint32_t bind_ip;       /* bound IP (host byte order) */
+    uint8_t  bind_addr[16]; /* bound address (IPv4-mapped for v4) */
     uint16_t bind_port;     /* bound port */
-    uint32_t peer_ip;       /* connected peer IP (host byte order) */
+    uint8_t  bind_family;   /* AF_INET or AF_INET6 */
+    uint8_t  peer_addr[16]; /* connected peer (IPv4-mapped for v4) */
     uint16_t peer_port;     /* connected peer port */
+    uint8_t  addr_family;   /* AF_INET or AF_INET6 */
     int fallback_tcp;       /* 1 if we fell back to real TCP */
     int nonblocking;        /* 1 if O_NONBLOCK is set */
     uint64_t last_validate; /* timestamp of last session validation */
@@ -266,6 +268,9 @@ int socket(int domain, int type, int protocol)
             shim_fds[fd].pool_fd = -1;
             pthread_mutex_unlock(&shim_lock);
             SHIM_LOG("socket(%d) -> fd %d (intercepted)", domain, fd);
+        } else {
+            SHIM_LOG("socket(%d) -> fd %d exceeds POOL_SHIM_MAX_FDS, not intercepted",
+                     domain, fd);
         }
     }
     return fd;
@@ -276,33 +281,29 @@ int connect(int fd, const struct sockaddr *addr, socklen_t addrlen)
     struct pool_shim_fd *sf;
     struct pool_connect_req req;
     int pool_fd, ret;
-    uint32_t dest_ip;
+    uint8_t dest_addr[16];
     uint16_t dest_port;
+    uint8_t af;
 
     shim_init();
     sf = get_shim(fd);
     if (!sf || !addr)
         return real_connect(fd, addr, addrlen);
 
-    /* Extract IPv4 address from AF_INET or IPv4-mapped AF_INET6 */
+    /* Extract address into unified 128-bit format */
     if (addr->sa_family == AF_INET) {
         struct sockaddr_in *sin = (struct sockaddr_in *)addr;
-        dest_ip = ntohl(sin->sin_addr.s_addr);
+        pool_ipv4_to_mapped(ntohl(sin->sin_addr.s_addr), dest_addr);
         dest_port = ntohs(sin->sin_port);
+        af = AF_INET;
     } else if (addr->sa_family == AF_INET6) {
         struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)addr;
-        /* Check for IPv4-mapped IPv6 address (::ffff:x.x.x.x) */
-        if (IN6_IS_ADDR_V4MAPPED(&sin6->sin6_addr)) {
-            /* Extract the IPv4 portion from the last 4 bytes */
-            memcpy(&dest_ip, &sin6->sin6_addr.s6_addr[12], 4);
-            dest_ip = ntohl(dest_ip);
-            dest_port = ntohs(sin6->sin6_port);
-            SHIM_LOG("IPv4-mapped IPv6 address detected, using POOL for fd=%d", fd);
-        } else {
-            /* Pure IPv6 — POOL doesn't support it yet, fall through to TCP */
-            SHIM_LOG("pure IPv6 address, falling back to TCP for fd=%d", fd);
-            return real_connect(fd, addr, addrlen);
-        }
+        memcpy(dest_addr, &sin6->sin6_addr, 16);
+        dest_port = ntohs(sin6->sin6_port);
+        if (pool_addr_is_v4mapped(dest_addr))
+            af = AF_INET;
+        else
+            af = AF_INET6;
     } else {
         return real_connect(fd, addr, addrlen);
     }
@@ -312,9 +313,7 @@ int connect(int fd, const struct sockaddr *addr, socklen_t addrlen)
         return real_connect(fd, addr, addrlen);
     }
 
-    SHIM_LOG("connect fd=%d -> %u.%u.%u.%u:%d via POOL",
-             fd, (dest_ip >> 24) & 0xFF, (dest_ip >> 16) & 0xFF,
-             (dest_ip >> 8) & 0xFF, dest_ip & 0xFF, dest_port);
+    SHIM_LOG("connect fd=%d -> POOL (af=%d, port=%d)", fd, af, dest_port);
 
     /* Open /dev/pool */
     pool_fd = open_pool_dev();
@@ -330,7 +329,8 @@ int connect(int fd, const struct sockaddr *addr, socklen_t addrlen)
 
     /* Connect via POOL */
     memset(&req, 0, sizeof(req));
-    req.peer_ip = dest_ip;
+    memcpy(req.peer_addr, dest_addr, 16);
+    req.addr_family = af;
     req.peer_port = shim_listen_port;
 
     ret = ioctl(pool_fd, POOL_IOC_CONNECT, &req);
@@ -347,8 +347,9 @@ int connect(int fd, const struct sockaddr *addr, socklen_t addrlen)
     pthread_mutex_lock(&shim_lock);
     sf->pool_fd = pool_fd;
     sf->session_idx = ret;
-    sf->peer_ip = dest_ip;
+    memcpy(sf->peer_addr, dest_addr, 16);
     sf->peer_port = dest_port;
+    sf->addr_family = af;
     pthread_mutex_unlock(&shim_lock);
 
     SHIM_LOG("POOL session %d established for fd=%d", ret, fd);
@@ -358,7 +359,6 @@ int connect(int fd, const struct sockaddr *addr, socklen_t addrlen)
 int bind(int fd, const struct sockaddr *addr, socklen_t addrlen)
 {
     struct pool_shim_fd *sf;
-    struct sockaddr_in *sin;
     int ret;
 
     shim_init();
@@ -367,11 +367,19 @@ int bind(int fd, const struct sockaddr *addr, socklen_t addrlen)
         return ret;
 
     sf = get_shim(fd);
-    if (sf && addr && addr->sa_family == AF_INET) {
-        sin = (struct sockaddr_in *)addr;
-        sf->bind_ip = ntohl(sin->sin_addr.s_addr);
-        sf->bind_port = ntohs(sin->sin_port);
-        SHIM_LOG("bind fd=%d port=%d", fd, sf->bind_port);
+    if (sf && addr) {
+        if (addr->sa_family == AF_INET) {
+            struct sockaddr_in *sin = (struct sockaddr_in *)addr;
+            pool_ipv4_to_mapped(ntohl(sin->sin_addr.s_addr), sf->bind_addr);
+            sf->bind_port = ntohs(sin->sin_port);
+            sf->bind_family = AF_INET;
+        } else if (addr->sa_family == AF_INET6) {
+            struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)addr;
+            memcpy(sf->bind_addr, &sin6->sin6_addr, 16);
+            sf->bind_port = ntohs(sin6->sin6_port);
+            sf->bind_family = AF_INET6;
+        }
+        SHIM_LOG("bind fd=%d port=%d af=%d", fd, sf->bind_port, sf->bind_family);
     }
     return ret;
 }
@@ -447,7 +455,9 @@ int accept(int fd, struct sockaddr *addr, socklen_t *addrlen)
 
         if (found_session >= 0) {
             /* Create a synthetic socket FD for the POOL session */
-            int syn_fd = real_socket(AF_INET, SOCK_STREAM, 0);
+            int sock_af = (infos[i].addr_family == AF_INET6) ?
+                          AF_INET6 : AF_INET;
+            int syn_fd = real_socket(sock_af, SOCK_STREAM, 0);
             if (syn_fd >= 0 && syn_fd < POOL_SHIM_MAX_FDS) {
                 pthread_mutex_lock(&shim_lock);
                 memset(&shim_fds[syn_fd], 0, sizeof(shim_fds[syn_fd]));
@@ -455,16 +465,29 @@ int accept(int fd, struct sockaddr *addr, socklen_t *addrlen)
                 shim_fds[syn_fd].real_fd = syn_fd;
                 shim_fds[syn_fd].pool_fd = sf->pool_fd;
                 shim_fds[syn_fd].session_idx = found_session;
-                shim_fds[syn_fd].peer_ip = infos[i].peer_ip;
+                memcpy(shim_fds[syn_fd].peer_addr, infos[i].peer_addr, 16);
                 shim_fds[syn_fd].peer_port = infos[i].peer_port;
+                shim_fds[syn_fd].addr_family = infos[i].addr_family;
                 pthread_mutex_unlock(&shim_lock);
 
-                if (addr && addrlen && *addrlen >= sizeof(struct sockaddr_in)) {
-                    struct sockaddr_in *sin = (struct sockaddr_in *)addr;
-                    sin->sin_family = AF_INET;
-                    sin->sin_addr.s_addr = htonl(infos[i].peer_ip);
-                    sin->sin_port = htons(infos[i].peer_port);
-                    *addrlen = sizeof(struct sockaddr_in);
+                if (addr && addrlen) {
+                    if (sock_af == AF_INET6 &&
+                        *addrlen >= sizeof(struct sockaddr_in6)) {
+                        struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)addr;
+                        memset(sin6, 0, sizeof(*sin6));
+                        sin6->sin6_family = AF_INET6;
+                        memcpy(&sin6->sin6_addr, infos[i].peer_addr, 16);
+                        sin6->sin6_port = htons(infos[i].peer_port);
+                        *addrlen = sizeof(struct sockaddr_in6);
+                    } else if (*addrlen >= sizeof(struct sockaddr_in)) {
+                        struct sockaddr_in *sin = (struct sockaddr_in *)addr;
+                        memset(sin, 0, sizeof(*sin));
+                        sin->sin_family = AF_INET;
+                        sin->sin_addr.s_addr = htonl(
+                            pool_mapped_to_ipv4(infos[i].peer_addr));
+                        sin->sin_port = htons(infos[i].peer_port);
+                        *addrlen = sizeof(struct sockaddr_in);
+                    }
                 }
 
                 SHIM_LOG("accept fd=%d -> POOL session %d (syn_fd=%d)",
@@ -924,14 +947,28 @@ int getpeername(int fd, struct sockaddr *addr, socklen_t *addrlen)
     shim_init();
     sf = get_shim(fd);
 
-    if (sf && sf->session_idx >= 0 && addr && addrlen &&
-        *addrlen >= sizeof(struct sockaddr_in)) {
-        struct sockaddr_in *sin = (struct sockaddr_in *)addr;
-        sin->sin_family = AF_INET;
-        sin->sin_addr.s_addr = htonl(sf->peer_ip);
-        sin->sin_port = htons(sf->peer_port);
-        *addrlen = sizeof(struct sockaddr_in);
-        return 0;
+    if (sf && sf->session_idx >= 0 && addr && addrlen) {
+        if (sf->addr_family == AF_INET6 &&
+            !pool_addr_is_v4mapped(sf->peer_addr)) {
+            if (*addrlen >= sizeof(struct sockaddr_in6)) {
+                struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)addr;
+                memset(sin6, 0, sizeof(*sin6));
+                sin6->sin6_family = AF_INET6;
+                memcpy(&sin6->sin6_addr, sf->peer_addr, 16);
+                sin6->sin6_port = htons(sf->peer_port);
+                *addrlen = sizeof(struct sockaddr_in6);
+                return 0;
+            }
+        } else if (*addrlen >= sizeof(struct sockaddr_in)) {
+            struct sockaddr_in *sin = (struct sockaddr_in *)addr;
+            memset(sin, 0, sizeof(*sin));
+            sin->sin_family = AF_INET;
+            sin->sin_addr.s_addr = htonl(
+                pool_mapped_to_ipv4(sf->peer_addr));
+            sin->sin_port = htons(sf->peer_port);
+            *addrlen = sizeof(struct sockaddr_in);
+            return 0;
+        }
     }
 
     return real_getpeername(fd, addr, addrlen);

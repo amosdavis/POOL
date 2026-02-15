@@ -28,7 +28,7 @@
  *   pool_relay start                   Start relaying
  *   pool_relay status                  Show relay stats and reputation
  *   pool_relay peers                   Show peered relays
- *   pool_relay enroll <peer_ip>        Peer with another relay
+ *   pool_relay enroll <peer>            Peer with another relay
  */
 
 #include <stdio.h>
@@ -39,8 +39,10 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <time.h>
+#include <pthread.h>
 #include <sys/ioctl.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 
 #include "../linux/pool.h"
 
@@ -48,11 +50,13 @@
 #define RELAY_MAX_PEERS      128
 #define RELAY_STATE_FILE     "/var/lib/pool/relay_state.dat"
 #define RELAY_CHANNEL        2      /* POOL channel for relay control */
+#define RELAY_BUF_SIZE       4096   /* relay data buffer size */
 
 /* ---- Relay peer entry ---- */
 
 struct relay_peer {
-    uint32_t ip;                     /* host byte order */
+    uint8_t  peer_addr[16];          /* 128-bit address (IPv4-mapped for v4) */
+    uint8_t  addr_family;            /* AF_INET or AF_INET6 */
     uint16_t port;
     int      session_idx;            /* POOL session to this peer */
     uint64_t bytes_relayed_for;      /* bytes we relayed for them */
@@ -66,7 +70,7 @@ struct relay_peer {
 
 struct relay_state {
     /* Identity */
-    uint32_t my_ip;
+    uint8_t my_addr[16];
 
     /* Stats */
     uint64_t total_bytes_relayed;    /* total bytes relayed for others */
@@ -83,6 +87,7 @@ struct relay_state {
 };
 
 static struct relay_state state;
+static pthread_mutex_t state_lock = PTHREAD_MUTEX_INITIALIZER;
 static int pool_fd = -1;
 static volatile int running = 1;
 
@@ -98,7 +103,7 @@ struct relay_msg {
     uint8_t  type;
     uint8_t  flags;
     uint16_t reserved;
-    uint32_t dest_ip;      /* final destination (for FORWARD) */
+    uint32_t dest_addr[4]; /* 128-bit final destination (for FORWARD) */
     uint16_t dest_port;
     uint16_t data_len;
     /* For SCORE messages: */
@@ -139,23 +144,28 @@ static void load_state(void)
     }
 }
 
-static struct relay_peer *find_peer(uint32_t ip)
+static struct relay_peer *find_peer(const uint8_t addr[16])
 {
     int i;
+    /* Caller must hold state_lock */
     for (i = 0; i < state.peer_count; i++) {
-        if (state.peers[i].ip == ip && state.peers[i].active)
+        if (memcmp(state.peers[i].peer_addr, addr, 16) == 0 &&
+            state.peers[i].active)
             return &state.peers[i];
     }
     return NULL;
 }
 
-static struct relay_peer *add_peer(uint32_t ip, uint16_t port, int session_idx)
+static struct relay_peer *add_peer(const uint8_t addr[16], uint8_t af,
+                                   uint16_t port, int session_idx)
 {
     int i;
+    /* Caller must hold state_lock */
     for (i = 0; i < RELAY_MAX_PEERS; i++) {
         if (!state.peers[i].active) {
             memset(&state.peers[i], 0, sizeof(state.peers[i]));
-            state.peers[i].ip = ip;
+            memcpy(state.peers[i].peer_addr, addr, 16);
+            state.peers[i].addr_family = af;
             state.peers[i].port = port;
             state.peers[i].session_idx = session_idx;
             state.peers[i].active = 1;
@@ -206,7 +216,6 @@ static int cmd_start(void)
 
         for (i = 0; i < list.count; i++) {
             struct relay_msg msg;
-            char buf[RELAY_CHANNEL];
             uint32_t len;
             struct pool_recv_req rreq;
 
@@ -214,14 +223,23 @@ static int cmd_start(void)
                 continue;
 
             /* Check if this is a known peer */
-            if (!find_peer(infos[i].peer_ip)) {
-                struct in_addr a;
-                a.s_addr = htonl(infos[i].peer_ip);
+            pthread_mutex_lock(&state_lock);
+            if (!find_peer(infos[i].peer_addr)) {
+                char addr_str[INET6_ADDRSTRLEN];
+                if (pool_addr_is_v4mapped(infos[i].peer_addr)) {
+                    uint32_t ip4 = pool_mapped_to_ipv4(infos[i].peer_addr);
+                    uint32_t nip = htonl(ip4);
+                    inet_ntop(AF_INET, &nip, addr_str, sizeof(addr_str));
+                } else {
+                    inet_ntop(AF_INET6, infos[i].peer_addr,
+                              addr_str, sizeof(addr_str));
+                }
                 printf("New relay peer: %s (session %u)\n",
-                       inet_ntoa(a), infos[i].index);
-                add_peer(infos[i].peer_ip, infos[i].peer_port,
-                         infos[i].index);
+                       addr_str, infos[i].index);
+                add_peer(infos[i].peer_addr, infos[i].addr_family,
+                         infos[i].peer_port, infos[i].index);
             }
+            pthread_mutex_unlock(&state_lock);
 
             /* Try to receive relay messages on channel 2 */
             memset(&rreq, 0, sizeof(rreq));
@@ -235,11 +253,20 @@ static int cmd_start(void)
 
             if (msg.type == RELAY_MSG_FORWARD) {
                 /* Forward data to another peer */
-                struct relay_peer *dest = find_peer(msg.dest_ip);
-                if (dest && dest->session_idx >= 0) {
+                pthread_mutex_lock(&state_lock);
+                struct relay_peer *dest = find_peer((const uint8_t *)msg.dest_addr);
+                int dest_session = (dest && dest->session_idx >= 0) ?
+                                   dest->session_idx : -1;
+                pthread_mutex_unlock(&state_lock);
+
+                if (dest_session >= 0) {
                     struct pool_send_req sreq;
-                    char fwd_buf[RELAY_CHANNEL];
+                    char fwd_buf[RELAY_BUF_SIZE];
                     uint32_t fwd_len = msg.data_len;
+
+                    /* Clamp forwarded data to buffer size */
+                    if (fwd_len > sizeof(fwd_buf))
+                        fwd_len = sizeof(fwd_buf);
 
                     /* Receive the forwarded data */
                     memset(&rreq, 0, sizeof(rreq));
@@ -250,22 +277,25 @@ static int cmd_start(void)
                     if (ioctl(pool_fd, POOL_IOC_RECV, &rreq) >= 0) {
                         /* Forward to destination */
                         memset(&sreq, 0, sizeof(sreq));
-                        sreq.session_idx = dest->session_idx;
+                        sreq.session_idx = dest_session;
                         sreq.channel = RELAY_CHANNEL;
                         sreq.len = rreq.len;
                         sreq.data_ptr = (uint64_t)(unsigned long)fwd_buf;
                         ioctl(pool_fd, POOL_IOC_SEND, &sreq);
 
+                        pthread_mutex_lock(&state_lock);
                         state.total_bytes_relayed += rreq.len;
 
                         /* Credit the source peer */
-                        struct relay_peer *src = find_peer(infos[i].peer_ip);
+                        struct relay_peer *src = find_peer(infos[i].peer_addr);
                         if (src) src->bytes_relayed_for += rreq.len;
+                        pthread_mutex_unlock(&state_lock);
                     }
                 }
             } else if (msg.type == RELAY_MSG_SCORE) {
                 /* Peer sharing their score */
-                struct relay_peer *p = find_peer(infos[i].peer_ip);
+                pthread_mutex_lock(&state_lock);
+                struct relay_peer *p = find_peer(infos[i].peer_addr);
                 if (p) {
                     if (msg.bytes_consumed > 0)
                         p->generosity_score =
@@ -274,12 +304,22 @@ static int cmd_start(void)
                         p->generosity_score = 10.0;
                     p->last_seen = time(NULL);
                 }
+                pthread_mutex_unlock(&state_lock);
             } else if (msg.type == RELAY_MSG_ENROLL) {
-                struct in_addr a;
-                a.s_addr = htonl(infos[i].peer_ip);
-                printf("Enrollment request from %s\n", inet_ntoa(a));
-                add_peer(infos[i].peer_ip, infos[i].peer_port,
-                         infos[i].index);
+                char addr_str[INET6_ADDRSTRLEN];
+                if (pool_addr_is_v4mapped(infos[i].peer_addr)) {
+                    uint32_t ip4 = pool_mapped_to_ipv4(infos[i].peer_addr);
+                    uint32_t nip = htonl(ip4);
+                    inet_ntop(AF_INET, &nip, addr_str, sizeof(addr_str));
+                } else {
+                    inet_ntop(AF_INET6, infos[i].peer_addr,
+                              addr_str, sizeof(addr_str));
+                }
+                printf("Enrollment request from %s\n", addr_str);
+                pthread_mutex_lock(&state_lock);
+                add_peer(infos[i].peer_addr, infos[i].addr_family,
+                         infos[i].peer_port, infos[i].index);
+                pthread_mutex_unlock(&state_lock);
 
                 /* Send ACK with our score */
                 struct relay_msg ack;
@@ -304,6 +344,7 @@ static int cmd_start(void)
             time_t now = time(NULL);
             if (now - last_score_exchange >= 30) {
                 int j;
+                pthread_mutex_lock(&state_lock);
                 update_score();
                 for (j = 0; j < state.peer_count; j++) {
                     if (!state.peers[j].active) continue;
@@ -322,6 +363,7 @@ static int cmd_start(void)
                     sreq.data_ptr = (uint64_t)(unsigned long)&score_msg;
                     ioctl(pool_fd, POOL_IOC_SEND, &sreq);
                 }
+                pthread_mutex_unlock(&state_lock);
                 last_score_exchange = now;
                 save_state();
             }
@@ -339,7 +381,9 @@ static int cmd_start(void)
 static int cmd_status(void)
 {
     load_state();
+    pthread_mutex_lock(&state_lock);
     update_score();
+    pthread_mutex_unlock(&state_lock);
 
     printf("=== POOL Relay Status ===\n\n");
     printf("Generosity score:     %.2f %s\n",
@@ -361,14 +405,21 @@ static int cmd_status(void)
 
     if (state.peer_count > 0) {
         int i;
-        printf("%-16s %-8s %-12s %-12s %-8s\n",
+        printf("%-40s %-8s %-12s %-12s %-8s\n",
                "PEER", "PORT", "RELAYED(MB)", "CONSUMED(MB)", "SCORE");
         for (i = 0; i < state.peer_count; i++) {
             if (!state.peers[i].active) continue;
-            struct in_addr a;
-            a.s_addr = htonl(state.peers[i].ip);
-            printf("%-16s %-8u %-12.1f %-12.1f %-8.2f\n",
-                   inet_ntoa(a), state.peers[i].port,
+            char addr_str[INET6_ADDRSTRLEN];
+            if (pool_addr_is_v4mapped(state.peers[i].peer_addr)) {
+                uint32_t ip4 = pool_mapped_to_ipv4(state.peers[i].peer_addr);
+                uint32_t nip = htonl(ip4);
+                inet_ntop(AF_INET, &nip, addr_str, sizeof(addr_str));
+            } else {
+                inet_ntop(AF_INET6, state.peers[i].peer_addr,
+                          addr_str, sizeof(addr_str));
+            }
+            printf("%-40s %-8u %-12.1f %-12.1f %-8.2f\n",
+                   addr_str, state.peers[i].port,
                    (double)state.peers[i].bytes_relayed_for / (1024*1024),
                    (double)state.peers[i].bytes_they_relayed / (1024*1024),
                    state.peers[i].generosity_score);
@@ -378,31 +429,43 @@ static int cmd_status(void)
     return 0;
 }
 
-static int cmd_enroll(const char *peer_ip)
+static int cmd_enroll(const char *peer_str)
 {
     struct pool_connect_req creq;
-    struct in_addr addr;
+    struct addrinfo hints, *res;
     struct relay_msg msg;
     struct pool_send_req sreq;
     int ret;
 
-    if (!inet_aton(peer_ip, &addr)) {
-        fprintf(stderr, "Invalid IP: %s\n", peer_ip);
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(peer_str, NULL, &hints, &res) != 0) {
+        fprintf(stderr, "Cannot resolve: %s\n", peer_str);
         return 1;
     }
 
     memset(&creq, 0, sizeof(creq));
-    creq.peer_ip = ntohl(addr.s_addr);
+    if (res->ai_family == AF_INET6) {
+        struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)res->ai_addr;
+        memcpy(creq.peer_addr, &s6->sin6_addr, 16);
+        creq.addr_family = AF_INET6;
+    } else {
+        struct sockaddr_in *s4 = (struct sockaddr_in *)res->ai_addr;
+        pool_ipv4_to_mapped(ntohl(s4->sin_addr.s_addr), creq.peer_addr);
+        creq.addr_family = AF_INET;
+    }
     creq.peer_port = RELAY_PORT;
+    freeaddrinfo(res);
 
     ret = ioctl(pool_fd, POOL_IOC_CONNECT, &creq);
     if (ret < 0) {
         fprintf(stderr, "Cannot connect to relay %s: %s\n",
-                peer_ip, strerror(errno));
+                peer_str, strerror(errno));
         return 1;
     }
 
-    printf("Connected to relay %s (session %d)\n", peer_ip, ret);
+    printf("Connected to relay %s (session %d)\n", peer_str, ret);
 
     /* Send enrollment request */
     load_state();
@@ -418,10 +481,12 @@ static int cmd_enroll(const char *peer_ip)
     sreq.data_ptr = (uint64_t)(unsigned long)&msg;
     ioctl(pool_fd, POOL_IOC_SEND, &sreq);
 
-    add_peer(ntohl(addr.s_addr), RELAY_PORT, ret);
+    pthread_mutex_lock(&state_lock);
+    add_peer(creq.peer_addr, creq.addr_family, RELAY_PORT, ret);
+    pthread_mutex_unlock(&state_lock);
     save_state();
 
-    printf("Enrolled with relay %s\n", peer_ip);
+    printf("Enrolled with relay %s\n", peer_str);
     printf("  Your generosity score: %.2f\n", state.my_generosity_score);
     return 0;
 }
@@ -442,7 +507,7 @@ static void usage(void)
         "Commands:\n"
         "  pool_relay start               Start relaying\n"
         "  pool_relay status              Show stats and reputation\n"
-        "  pool_relay enroll <peer_ip>    Peer with another relay\n");
+        "  pool_relay enroll <peer>       Peer with another relay\n");
 }
 
 int main(int argc, char **argv)

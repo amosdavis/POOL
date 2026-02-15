@@ -142,3 +142,54 @@ LD_PRELOAD=/usr/lib/libpool_shim.so curl http://10.4.4.101:8080
 # Native POOL file transfer
 pool_vault push 10.4.4.101 myfile.tar.gz /incoming/myfile.tar.gz
 ```
+
+---
+
+## IPv6 Deployment
+
+POOL supports full native IPv6 across all phases. All tools accept IPv4 addresses,
+IPv6 addresses, bracketed IPv6 literals (`[::1]`), and hostnames.
+
+### Dual-Stack Operation
+
+The POOL kernel listener uses `AF_INET6` with `IPV6_V6ONLY=0`, accepting both
+IPv4 and IPv6 connections on a single port. No separate IPv4 listener is needed.
+IPv4 clients appear internally as `::ffff:x.x.x.x` (IPv4-mapped IPv6).
+
+### Phase-Specific IPv6 Notes
+
+**Phase 1 (Bridge):** The bridge's TCP listener is dual-stack. Both IPv4 and IPv6
+TCP clients are accepted and forwarded over POOL. The `pool_bridge` CLI accepts
+IPv6 destinations:
+
+```bash
+pool_bridge --tcp-to-pool [::1]:8080 9253
+pool_bridge --pool-to-tcp [fd00::1]:443
+```
+
+**Phase 2 (Shim):** The shim intercepts both `AF_INET` and `AF_INET6` `connect()`
+calls. IPv4-mapped IPv6 addresses (`::ffff:x.x.x.x`) are detected and handled
+correctly. Pure IPv6 connections are routed through POOL natively. `getpeername()`
+and `accept()` return the correct address family.
+
+**Phase 3 (Native):** All CLI tools use `getaddrinfo()` for address resolution:
+
+```bash
+# IPv6 connectivity test
+pool_migrate test ::1 9253
+pool_migrate test fd00::1 9253
+
+# IPv6 vault transfer
+pool_vault push fd00::1 myfile.tar.gz /incoming/myfile.tar.gz
+
+# IPv6 relay peering
+pool_relay enroll fd00::2
+
+# IPv6 direct connection
+poolctl connect ::1 9253
+```
+
+### Raw Socket Transport
+
+The raw IP socket transport (protocol 253) remains IPv4-only. IPv6 traffic uses
+the TCP transport path exclusively. This is transparent to applications.

@@ -188,7 +188,7 @@ static void pool_discover_handle_announce(const struct pool_announce *ann,
         memcpy(peer->addr, ann->addr, POOL_ADDR_SIZE);
         peer->last_seen_ns = ktime_get_ns();
         peer->source = 0;  /* multicast */
-        pr_info("POOL: discovered peer %pI4h:%d\n", &src_ip, port);
+        pr_info("POOL: discovered peer %pI4:%d\n", &src_ip, port);
     }
     mutex_unlock(&peer_lock);
 }

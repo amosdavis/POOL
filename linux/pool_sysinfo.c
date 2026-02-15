@@ -66,8 +66,8 @@ static int pool_proc_sessions_show(struct seq_file *m, void *v)
         if (!s->active)
             continue;
 
-        seq_printf(m, "%-4d %pI4h          %-6d %-12s %-12llu %-12llu %-12llu %-8u\n",
-                   i, &s->peer_ip, s->peer_port,
+        seq_printf(m, "%-4d %pI6c     %-6d %-12s %-12llu %-12llu %-12llu %-8u\n",
+                   i, s->peer_addr, s->peer_port,
                    (s->state < 6) ? state_names[s->state] : "UNKNOWN",
                    s->bytes_sent, s->bytes_recv,
                    s->packets_sent,

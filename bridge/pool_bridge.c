@@ -30,6 +30,7 @@
 #include <sys/ioctl.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <fcntl.h>
 #include <poll.h>
 
@@ -170,31 +171,45 @@ static struct bridge_conn *alloc_bridge(void)
 }
 
 /* TCP→POOL mode: accept TCP, connect POOL, bridge bidirectionally */
-static int run_tcp_to_pool(uint16_t tcp_port, uint32_t pool_dest,
+static int run_tcp_to_pool(uint16_t tcp_port,
+                           const struct sockaddr_storage *pool_dest,
                            uint16_t pool_port)
 {
-    int listen_fd, client_fd, opt = 1;
-    struct sockaddr_in addr, client_addr;
+    int listen_fd, client_fd, opt = 1, v6only = 0;
+    struct sockaddr_in6 addr6;
+    struct sockaddr_storage client_addr;
     socklen_t clen;
+    char dest_str[INET6_ADDRSTRLEN];
 
-    listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    /* Format destination for logging */
+    if (pool_dest->ss_family == AF_INET6) {
+        const struct sockaddr_in6 *s6 = (const struct sockaddr_in6 *)pool_dest;
+        inet_ntop(AF_INET6, &s6->sin6_addr, dest_str, sizeof(dest_str));
+    } else {
+        const struct sockaddr_in *s4 = (const struct sockaddr_in *)pool_dest;
+        inet_ntop(AF_INET, &s4->sin_addr, dest_str, sizeof(dest_str));
+    }
+
+    /* Dual-stack TCP listener */
+    listen_fd = socket(AF_INET6, SOCK_STREAM, 0);
     if (listen_fd < 0) { perror("socket"); return 1; }
 
     setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(tcp_port);
+    setsockopt(listen_fd, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only));
 
-    if (bind(listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+    memset(&addr6, 0, sizeof(addr6));
+    addr6.sin6_family = AF_INET6;
+    addr6.sin6_addr = in6addr_any;
+    addr6.sin6_port = htons(tcp_port);
+
+    if (bind(listen_fd, (struct sockaddr *)&addr6, sizeof(addr6)) < 0) {
         perror("bind"); close(listen_fd); return 1;
     }
     if (listen(listen_fd, 64) < 0) {
         perror("listen"); close(listen_fd); return 1;
     }
 
-    printf("pool_bridge: TCP:%d → POOL:%s:%d\n",
-           tcp_port, inet_ntoa(*(struct in_addr *)&pool_dest), pool_port);
+    printf("pool_bridge: TCP:%d → POOL:%s:%d\n", tcp_port, dest_str, pool_port);
 
     while (running) {
         struct bridge_conn *bc;
@@ -224,8 +239,19 @@ static int run_tcp_to_pool(uint16_t tcp_port, uint32_t pool_dest,
 
         /* Connect to POOL peer */
         memset(&creq, 0, sizeof(creq));
-        creq.peer_ip = pool_dest;
+        if (pool_dest->ss_family == AF_INET6) {
+            const struct sockaddr_in6 *s6 =
+                (const struct sockaddr_in6 *)pool_dest;
+            memcpy(creq.peer_addr, &s6->sin6_addr, 16);
+            creq.addr_family = AF_INET6;
+        } else {
+            const struct sockaddr_in *s4 =
+                (const struct sockaddr_in *)pool_dest;
+            pool_ipv4_to_mapped(ntohl(s4->sin_addr.s_addr), creq.peer_addr);
+            creq.addr_family = AF_INET;
+        }
         creq.peer_port = pool_port;
+
         ret = ioctl(bc->pool_fd, POOL_IOC_CONNECT, &creq);
         if (ret < 0) {
             fprintf(stderr, "POOL connect failed\n");
@@ -242,27 +268,43 @@ static int run_tcp_to_pool(uint16_t tcp_port, uint32_t pool_dest,
 
     /* Clean shutdown: join all active bridge threads */
     running = 0;
-    pthread_mutex_lock(&bridge_lock);
-    for (int i = 0; i < MAX_BRIDGES; i++) {
-        if (bridges[i].active) {
-            pthread_t t = bridges[i].thread;
-            pthread_mutex_unlock(&bridge_lock);
-            pthread_join(t, NULL);
-            pthread_mutex_lock(&bridge_lock);
+    {
+        pthread_t threads_to_join[MAX_BRIDGES];
+        int join_count = 0, idx;
+
+        pthread_mutex_lock(&bridge_lock);
+        for (idx = 0; idx < MAX_BRIDGES; idx++) {
+            if (bridges[idx].active) {
+                bridges[idx].active = 0;
+                threads_to_join[join_count++] = bridges[idx].thread;
+            }
         }
+        pthread_mutex_unlock(&bridge_lock);
+
+        for (idx = 0; idx < join_count; idx++)
+            pthread_join(threads_to_join[idx], NULL);
     }
-    pthread_mutex_unlock(&bridge_lock);
 
     close(listen_fd);
     return 0;
 }
 
 /* POOL→TCP mode: accept POOL sessions, forward to TCP destination */
-static int run_pool_to_tcp(uint16_t pool_port, uint32_t tcp_dest,
+static int run_pool_to_tcp(uint16_t pool_port,
+                           const struct sockaddr_storage *tcp_dest,
                            uint16_t tcp_port)
 {
     int ret;
     uint16_t port = pool_port;
+    char dest_str[INET6_ADDRSTRLEN];
+
+    if (tcp_dest->ss_family == AF_INET6) {
+        const struct sockaddr_in6 *s6 = (const struct sockaddr_in6 *)tcp_dest;
+        inet_ntop(AF_INET6, &s6->sin6_addr, dest_str, sizeof(dest_str));
+    } else {
+        const struct sockaddr_in *s4 = (const struct sockaddr_in *)tcp_dest;
+        inet_ntop(AF_INET, &s4->sin_addr, dest_str, sizeof(dest_str));
+    }
 
     pool_fd_global = open("/dev/pool", O_RDWR);
     if (pool_fd_global < 0) { perror("/dev/pool"); return 1; }
@@ -272,7 +314,7 @@ static int run_pool_to_tcp(uint16_t pool_port, uint32_t tcp_dest,
     }
 
     printf("pool_bridge: POOL:%d → TCP:%s:%d\n",
-           pool_port, inet_ntoa(*(struct in_addr *)&tcp_dest), tcp_port);
+           pool_port, dest_str, tcp_port);
 
     /* Poll for new POOL sessions, bridge to TCP */
     while (running) {
@@ -329,25 +371,41 @@ static int run_pool_to_tcp(uint16_t pool_port, uint32_t tcp_dest,
             bc->session_idx = infos[i].index;
 
             /* Connect to TCP dest */
-            bc->tcp_fd = socket(AF_INET, SOCK_STREAM, 0);
+            bc->tcp_fd = socket(tcp_dest->ss_family, SOCK_STREAM, 0);
             if (bc->tcp_fd < 0) { bc->active = 0; continue; }
 
-            struct sockaddr_in dest_addr;
-            memset(&dest_addr, 0, sizeof(dest_addr));
-            dest_addr.sin_family = AF_INET;
-            dest_addr.sin_addr.s_addr = htonl(tcp_dest);
-            dest_addr.sin_port = htons(tcp_port);
-
-            if (connect(bc->tcp_fd, (struct sockaddr *)&dest_addr,
-                        sizeof(dest_addr)) < 0) {
-                close(bc->tcp_fd);
-                bc->active = 0;
-                continue;
+            if (tcp_dest->ss_family == AF_INET6) {
+                struct sockaddr_in6 dest6;
+                const struct sockaddr_in6 *s6 =
+                    (const struct sockaddr_in6 *)tcp_dest;
+                memset(&dest6, 0, sizeof(dest6));
+                dest6.sin6_family = AF_INET6;
+                memcpy(&dest6.sin6_addr, &s6->sin6_addr, 16);
+                dest6.sin6_port = htons(tcp_port);
+                if (connect(bc->tcp_fd, (struct sockaddr *)&dest6,
+                            sizeof(dest6)) < 0) {
+                    close(bc->tcp_fd);
+                    bc->active = 0;
+                    continue;
+                }
+            } else {
+                struct sockaddr_in dest4;
+                const struct sockaddr_in *s4 =
+                    (const struct sockaddr_in *)tcp_dest;
+                memset(&dest4, 0, sizeof(dest4));
+                dest4.sin_family = AF_INET;
+                dest4.sin_addr = s4->sin_addr;
+                dest4.sin_port = htons(tcp_port);
+                if (connect(bc->tcp_fd, (struct sockaddr *)&dest4,
+                            sizeof(dest4)) < 0) {
+                    close(bc->tcp_fd);
+                    bc->active = 0;
+                    continue;
+                }
             }
 
             printf("  bridge: POOL session %d → TCP %s:%d\n",
-                   bc->session_idx,
-                   inet_ntoa(dest_addr.sin_addr), tcp_port);
+                   bc->session_idx, dest_str, tcp_port);
             pthread_create(&bc->thread, NULL, bidir_thread, bc);
         }
 
@@ -355,16 +413,22 @@ static int run_pool_to_tcp(uint16_t pool_port, uint32_t tcp_dest,
     }
 
     /* Clean shutdown: join all active bridge threads */
-    pthread_mutex_lock(&bridge_lock);
-    for (int i = 0; i < MAX_BRIDGES; i++) {
-        if (bridges[i].active) {
-            pthread_t t = bridges[i].thread;
-            pthread_mutex_unlock(&bridge_lock);
-            pthread_join(t, NULL);
-            pthread_mutex_lock(&bridge_lock);
+    {
+        pthread_t threads_to_join[MAX_BRIDGES];
+        int join_count = 0, idx;
+
+        pthread_mutex_lock(&bridge_lock);
+        for (idx = 0; idx < MAX_BRIDGES; idx++) {
+            if (bridges[idx].active) {
+                bridges[idx].active = 0;
+                threads_to_join[join_count++] = bridges[idx].thread;
+            }
         }
+        pthread_mutex_unlock(&bridge_lock);
+
+        for (idx = 0; idx < join_count; idx++)
+            pthread_join(threads_to_join[idx], NULL);
     }
-    pthread_mutex_unlock(&bridge_lock);
 
     ioctl(pool_fd_global, POOL_IOC_STOP);
     close(pool_fd_global);
@@ -376,18 +440,60 @@ static void usage(void)
     fprintf(stderr,
         "pool_bridge - TCP ↔ POOL protocol bridge\n\n"
         "Modes:\n"
-        "  pool_bridge tcp2pool <tcp_port> <pool_dest_ip> [pool_port]\n"
-        "    Accept TCP on <tcp_port>, forward over POOL to <pool_dest_ip>\n\n"
-        "  pool_bridge pool2tcp <pool_port> <tcp_dest_ip> <tcp_port>\n"
-        "    Accept POOL on <pool_port>, forward to TCP <tcp_dest_ip>:<tcp_port>\n\n"
+        "  pool_bridge tcp2pool <tcp_port> <pool_dest> [pool_port]\n"
+        "    Accept TCP on <tcp_port>, forward over POOL to <pool_dest>\n\n"
+        "  pool_bridge pool2tcp <pool_port> <tcp_dest> <tcp_port>\n"
+        "    Accept POOL on <pool_port>, forward to TCP <tcp_dest>:<tcp_port>\n\n"
+        "Addresses can be IPv4 (10.4.4.101) or IPv6 (::1, [2001:db8::1])\n\n"
         "Examples:\n"
         "  pool_bridge tcp2pool 8080 10.4.4.101 9253\n"
+        "  pool_bridge tcp2pool 8080 ::1 9253\n"
         "  pool_bridge pool2tcp 9253 127.0.0.1 80\n");
+}
+
+/* Resolve an address string (IPv4, IPv6, or hostname) */
+static int resolve_addr(const char *host, struct sockaddr_storage *out)
+{
+    struct addrinfo hints, *res;
+    int ret;
+    char clean[INET6_ADDRSTRLEN + 1];
+    const char *h = host;
+
+    /* Strip brackets from [IPv6] notation */
+    if (h[0] == '[') {
+        size_t len = strlen(h);
+        if (len > 2 && h[len - 1] == ']') {
+            memcpy(clean, h + 1, len - 2);
+            clean[len - 2] = '\0';
+            h = clean;
+        }
+    }
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_NUMERICHOST;
+
+    ret = getaddrinfo(h, NULL, &hints, &res);
+    if (ret != 0) {
+        /* Try without AI_NUMERICHOST for hostname resolution */
+        hints.ai_flags = 0;
+        ret = getaddrinfo(h, NULL, &hints, &res);
+        if (ret != 0) {
+            fprintf(stderr, "Cannot resolve '%s': %s\n",
+                    host, gai_strerror(ret));
+            return -1;
+        }
+    }
+
+    memcpy(out, res->ai_addr, res->ai_addrlen);
+    freeaddrinfo(res);
+    return 0;
 }
 
 int main(int argc, char **argv)
 {
-    struct in_addr dest_addr;
+    struct sockaddr_storage dest_addr;
 
     signal(SIGINT, sighandler);
     signal(SIGTERM, sighandler);
@@ -397,18 +503,14 @@ int main(int argc, char **argv)
     if (strcmp(argv[1], "tcp2pool") == 0) {
         uint16_t tcp_port = (uint16_t)atoi(argv[2]);
         uint16_t pool_port = (argc > 4) ? (uint16_t)atoi(argv[4]) : POOL_LISTEN_PORT;
-        if (!inet_aton(argv[3], &dest_addr)) {
-            fprintf(stderr, "Invalid IP: %s\n", argv[3]); return 1;
-        }
-        return run_tcp_to_pool(tcp_port, ntohl(dest_addr.s_addr), pool_port);
+        if (resolve_addr(argv[3], &dest_addr) < 0) return 1;
+        return run_tcp_to_pool(tcp_port, &dest_addr, pool_port);
     }
     else if (strcmp(argv[1], "pool2tcp") == 0) {
         uint16_t pool_port = (uint16_t)atoi(argv[2]);
         uint16_t tcp_port = (uint16_t)atoi(argv[4]);
-        if (!inet_aton(argv[3], &dest_addr)) {
-            fprintf(stderr, "Invalid IP: %s\n", argv[3]); return 1;
-        }
-        return run_pool_to_tcp(pool_port, ntohl(dest_addr.s_addr), tcp_port);
+        if (resolve_addr(argv[3], &dest_addr) < 0) return 1;
+        return run_pool_to_tcp(pool_port, &dest_addr, tcp_port);
     }
     else {
         usage();

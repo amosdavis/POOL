@@ -24,6 +24,7 @@ func TestFeatures(t *testing.T) {
 			InitializeRelayScenario(ctx)
 			InitializeWindowsScenario(ctx)
 			InitializeDarwinScenario(ctx)
+			InitializeIPv6Scenario(ctx)
 		},
 		Options: &opts,
 	}

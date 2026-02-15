@@ -674,20 +674,20 @@ uint64_t pool_crypto_next_seq(struct pool_crypto_state *cs)
 
 /* Generate puzzle seed for stateless handshake */
 void pool_crypto_gen_puzzle(uint8_t *seed, uint64_t server_secret,
-                            uint32_t client_ip)
+                            const uint8_t client_addr[16])
 {
     SHASH_DESC_ON_STACK(desc, pool_hmac_tfm);
-    uint8_t input[16];
+    uint8_t input[28]; /* 16-byte addr + 8-byte secret + 4-byte timestamp */
 
     if (!pool_hmac_tfm) {
         get_random_bytes(seed, 32);
         return;
     }
 
-    /* seed = HMAC(server_secret, client_ip || timestamp) */
-    memcpy(input, &client_ip, 4);
-    memcpy(input + 4, &server_secret, 8);
-    *(uint32_t *)(input + 12) = (uint32_t)(jiffies / HZ);
+    /* seed = HMAC(server_secret, client_addr || timestamp) */
+    memcpy(input, client_addr, 16);
+    memcpy(input + 16, &server_secret, 8);
+    *(uint32_t *)(input + 24) = (uint32_t)(jiffies / HZ);
 
     crypto_shash_setkey(pool_hmac_tfm, (uint8_t *)&server_secret, 8);
     desc->tfm = pool_hmac_tfm;

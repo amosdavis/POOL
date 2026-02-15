@@ -112,10 +112,24 @@ static void free_session(struct pool_bsd_session *sess)
 }
 
 static void handle_ctrl_command(const struct pool_ctrl_msg *cmd,
+                                ssize_t bytes_read,
                                 struct pool_ctrl_resp *resp)
 {
     resp->result = -1;
     resp->len = 0;
+
+    /* D03: Validate cmd->len against bytes actually read and buffer size */
+    if (bytes_read < (ssize_t)(sizeof(cmd->cmd) + sizeof(cmd->len)))
+        return;
+    if (cmd->len > (uint32_t)(bytes_read - offsetof(struct pool_ctrl_msg, data))) {
+        pool_log_warn("control command len %u exceeds read %zd", cmd->len,
+                      bytes_read);
+        return;
+    }
+    if (cmd->len > sizeof(cmd->data)) {
+        pool_log_warn("control command len %u exceeds data buffer", cmd->len);
+        return;
+    }
 
     switch (cmd->cmd) {
     case POOL_CMD_CONNECT: {
@@ -213,7 +227,7 @@ static void *ctrl_client_thread(void *arg)
 
     n = read(client_fd, &cmd, sizeof(cmd));
     if (n >= (ssize_t)(sizeof(cmd.cmd) + sizeof(cmd.len))) {
-        handle_ctrl_command(&cmd, &resp);
+        handle_ctrl_command(&cmd, n, &resp);
         write(client_fd, &resp, sizeof(resp));
     }
 

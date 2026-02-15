@@ -17,9 +17,9 @@
  *
  * Usage:
  *   pool_vault serve <directory>                  Share a directory
- *   pool_vault sync <peer_ip> <remote_dir> <local_dir>  Sync from peer
- *   pool_vault push <peer_ip> <file> <remote_path>      Push a file
- *   pool_vault pull <peer_ip> <remote_path> <local_path> Pull a file
+ *   pool_vault sync <peer> <remote_dir> <local_dir>  Sync from peer
+ *   pool_vault push <peer> <file> <remote_path>      Push a file
+ *   pool_vault pull <peer> <remote_path> <local_path> Pull a file
  *   pool_vault peers                              List known peers
  *   pool_vault status                             Show vault status
  */
@@ -36,12 +36,56 @@
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 
 #include "../linux/pool.h"
 
 #define VAULT_PORT      9253
 #define VAULT_BUF_SIZE  32768
 #define VAULT_MAX_PATH  4096
+
+/*
+ * Validate a path for safety: reject directory traversal and absolute paths.
+ * Returns 0 if safe, -1 if unsafe.
+ */
+static int vault_path_is_safe(const char *path, uint16_t path_len)
+{
+    const char *p;
+    const char *end;
+
+    if (!path || path_len == 0)
+        return -1;
+
+    /* Reject absolute paths */
+    if (path[0] == '/')
+        return -1;
+
+    /* Reject paths containing ".." component */
+    p = path;
+    end = path + path_len;
+    while (p < end) {
+        if (p[0] == '.') {
+            if ((p + 1 < end && p[1] == '.') &&
+                (p + 2 >= end || p[2] == '/')) {
+                if (p == path || (p > path && p[-1] == '/'))
+                    return -1;
+            }
+        }
+        /* Advance to next path component */
+        while (p < end && *p != '/')
+            p++;
+        if (p < end)
+            p++; /* skip '/' */
+    }
+
+    /* Reject null bytes embedded in path */
+    for (p = path; p < end; p++) {
+        if (*p == '\0')
+            return -1;
+    }
+
+    return 0;
+}
 
 /* Vault protocol commands (sent over POOL channel 1) */
 #define VAULT_CMD_LIST     0x01  /* list files in directory */
@@ -87,29 +131,41 @@ static int open_pool(void)
     return 0;
 }
 
-static int pool_connect(const char *ip_str)
+static int pool_connect(const char *host_str)
 {
     struct pool_connect_req req;
-    struct in_addr addr;
+    struct addrinfo hints, *res;
     int ret;
 
-    if (!inet_aton(ip_str, &addr)) {
-        fprintf(stderr, "Invalid IP: %s\n", ip_str);
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(host_str, NULL, &hints, &res) != 0) {
+        fprintf(stderr, "Cannot resolve: %s\n", host_str);
         return -1;
     }
 
     memset(&req, 0, sizeof(req));
-    req.peer_ip = ntohl(addr.s_addr);
+    if (res->ai_family == AF_INET6) {
+        struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)res->ai_addr;
+        memcpy(req.peer_addr, &s6->sin6_addr, 16);
+        req.addr_family = AF_INET6;
+    } else {
+        struct sockaddr_in *s4 = (struct sockaddr_in *)res->ai_addr;
+        pool_ipv4_to_mapped(ntohl(s4->sin_addr.s_addr), req.peer_addr);
+        req.addr_family = AF_INET;
+    }
     req.peer_port = VAULT_PORT;
+    freeaddrinfo(res);
 
     ret = ioctl(pool_fd, POOL_IOC_CONNECT, &req);
     if (ret < 0) {
         fprintf(stderr, "POOL handshake failed to %s: %s\n",
-                ip_str, strerror(errno));
+                host_str, strerror(errno));
         return -1;
     }
 
-    printf("Connected to %s (POOL session %d)\n", ip_str, ret);
+    printf("Connected to %s (POOL session %d)\n", host_str, ret);
     printf("  ✓ Mutual authentication (X25519)\n");
     printf("  ✓ Encrypted channel (ChaCha20-Poly1305)\n");
     printf("  ✓ HMAC on every packet\n");
@@ -305,10 +361,17 @@ static int cmd_status(void)
 
     printf("Active sessions: %u\n", list.count);
     for (i = 0; i < list.count; i++) {
-        struct in_addr a;
-        a.s_addr = htonl(infos[i].peer_ip);
+        char addr_str[INET6_ADDRSTRLEN];
+        if (pool_addr_is_v4mapped(infos[i].peer_addr)) {
+            uint32_t ip4 = pool_mapped_to_ipv4(infos[i].peer_addr);
+            uint32_t nip = htonl(ip4);
+            inet_ntop(AF_INET, &nip, addr_str, sizeof(addr_str));
+        } else {
+            inet_ntop(AF_INET6, infos[i].peer_addr,
+                      addr_str, sizeof(addr_str));
+        }
         printf("  [%u] %s:%u  sent=%.1fMB recv=%.1fMB rtt=%lluus\n",
-               infos[i].index, inet_ntoa(a), infos[i].peer_port,
+               infos[i].index, addr_str, infos[i].peer_port,
                (double)infos[i].bytes_sent / (1024*1024),
                (double)infos[i].bytes_recv / (1024*1024),
                (unsigned long long)(infos[i].telemetry.rtt_ns / 1000));
@@ -360,10 +423,27 @@ static int cmd_serve(const char *directory)
                 continue;
 
             /* Read path */
-            if (msg.path_len > 0 && msg.path_len < VAULT_MAX_PATH) {
+            if (msg.path_len > 0) {
+                if (msg.path_len >= VAULT_MAX_PATH) {
+                    /* U02: reject oversized path_len */
+                    struct vault_msg err_resp;
+                    memset(&err_resp, 0, sizeof(err_resp));
+                    err_resp.cmd = VAULT_CMD_ERR;
+                    pool_send(infos[i].index, &err_resp, sizeof(err_resp));
+                    continue;
+                }
                 len = msg.path_len;
                 pool_recv(infos[i].index, path, &len);
                 path[len] = '\0';
+
+                /* U01: reject directory traversal and absolute paths */
+                if (vault_path_is_safe(path, (uint16_t)len) != 0) {
+                    struct vault_msg err_resp;
+                    memset(&err_resp, 0, sizeof(err_resp));
+                    err_resp.cmd = VAULT_CMD_ERR;
+                    pool_send(infos[i].index, &err_resp, sizeof(err_resp));
+                    continue;
+                }
             }
 
             /* Handle command */

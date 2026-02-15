@@ -16,6 +16,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <sys/ioctl.h>
 
 #include "pool.h"
@@ -49,20 +50,34 @@ static void cmd_listen(int argc, char **argv)
 static void cmd_connect(int argc, char **argv)
 {
     struct pool_connect_req req;
-    struct in_addr addr;
+    struct addrinfo hints, *res;
     int ret;
 
     if (argc < 4) {
-        fprintf(stderr, "Usage: poolctl connect <ip> <port>\n");
+        fprintf(stderr, "Usage: poolctl connect <ip|host> <port>\n");
         return;
     }
-    if (!inet_aton(argv[2], &addr)) {
-        fprintf(stderr, "Invalid IP: %s\n", argv[2]);
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(argv[2], NULL, &hints, &res) != 0) {
+        fprintf(stderr, "Cannot resolve: %s\n", argv[2]);
         return;
     }
-    req.peer_ip = ntohl(addr.s_addr);
+
+    memset(&req, 0, sizeof(req));
+    if (res->ai_family == AF_INET6) {
+        struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)res->ai_addr;
+        memcpy(req.peer_addr, &s6->sin6_addr, 16);
+        req.addr_family = AF_INET6;
+    } else {
+        struct sockaddr_in *s4 = (struct sockaddr_in *)res->ai_addr;
+        pool_ipv4_to_mapped(ntohl(s4->sin_addr.s_addr), req.peer_addr);
+        req.addr_family = AF_INET;
+    }
     req.peer_port = (uint16_t)atoi(argv[3]);
-    req.reserved = 0;
+    freeaddrinfo(res);
 
     ret = ioctl(pool_fd, POOL_IOC_CONNECT, &req);
     if (ret < 0)
@@ -90,14 +105,20 @@ static void cmd_sessions(void)
     }
 
     printf("Active sessions: %u\n", list.count);
-    printf("%-4s %-16s %-6s %-12s %-12s %-12s %-10s\n",
+    printf("%-4s %-40s %-6s %-12s %-12s %-12s %-10s\n",
            "IDX", "PEER", "PORT", "STATE", "SENT", "RECV", "RTT(us)");
     for (i = 0; i < list.count; i++) {
         struct pool_session_info *s = &infos[i];
-        struct in_addr a;
-        a.s_addr = htonl(s->peer_ip);
-        printf("%-4u %-16s %-6u %-12s %-12llu %-12llu %-10llu\n",
-               s->index, inet_ntoa(a), s->peer_port,
+        char addr_str[INET6_ADDRSTRLEN];
+        if (pool_addr_is_v4mapped(s->peer_addr)) {
+            uint32_t ip4 = pool_mapped_to_ipv4(s->peer_addr);
+            uint32_t nip = htonl(ip4);
+            inet_ntop(AF_INET, &nip, addr_str, sizeof(addr_str));
+        } else {
+            inet_ntop(AF_INET6, s->peer_addr, addr_str, sizeof(addr_str));
+        }
+        printf("%-4u %-40s %-6u %-12s %-12llu %-12llu %-10llu\n",
+               s->index, addr_str, s->peer_port,
                (s->state < 6) ? state_names[s->state] : "?",
                (unsigned long long)s->bytes_sent,
                (unsigned long long)s->bytes_recv,

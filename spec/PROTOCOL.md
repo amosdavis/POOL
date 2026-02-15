@@ -291,7 +291,60 @@ See [`SECURITY.md`](SECURITY.md) for the complete vulnerability response playboo
 including triage procedures, emergency patching, crypto-specific incident playbooks,
 and version transition guidance.
 
-### 12. How POOL Addresses Each Documented Failure Category
+### 12. IPv6 Support
+
+POOL provides full native IPv6 support across the entire stack. IP addresses are
+not carried in POOL packet headers — the underlying TCP transport layer handles
+network addressing. This means the wire protocol is unchanged between IPv4 and IPv6.
+
+#### 12.1 Internal Address Representation
+
+All IP addresses are stored internally as 128-bit (16-byte) values:
+
+- **IPv4 addresses** are stored as IPv4-mapped IPv6: `::ffff:x.x.x.x`
+- **IPv6 addresses** are stored natively as 16 bytes
+- An `addr_family` field (`AF_INET` or `AF_INET6`) accompanies each address
+- Helper functions `pool_ipv4_to_mapped()`, `pool_mapped_to_ipv4()`, and
+  `pool_addr_is_v4mapped()` handle conversions
+
+#### 12.2 Dual-Stack Listener
+
+The kernel module's TCP listener uses `AF_INET6` with `IPV6_V6ONLY=0`:
+
+- Accepts both IPv4 and IPv6 connections on a single socket
+- IPv4 clients appear as `::ffff:x.x.x.x` in the peer address
+- No separate IPv4 listener is needed
+
+#### 12.3 Crypto IP Binding
+
+The proof-of-work puzzle in the handshake binds to the client's IP address.
+The puzzle input uses the full 16-byte address (28 bytes total: 16-byte address +
+8-byte server secret + 4-byte timestamp). This applies identically to IPv4-mapped
+and native IPv6 addresses.
+
+#### 12.4 Ioctl Interface
+
+The `pool_connect_req` structure uses:
+- `peer_addr[16]` — 128-bit destination address
+- `addr_family` — `AF_INET` or `AF_INET6`
+- `peer_port` — destination port
+
+The `pool_session_info` structure reports the same fields for active sessions.
+
+#### 12.5 Raw Socket Path
+
+The raw IP socket transport (protocol 253) remains IPv4-only. IPv4-mapped
+addresses are converted at the boundary using the helper functions. Raw socket
+transport for IPv6 is not currently implemented.
+
+#### 12.6 Userspace Tools
+
+All CLI tools (`poolctl`, `pool_test`, `pool_vault`, `pool_relay`, `pool_bridge`,
+`pool_migrate`) accept IPv6 addresses, bracketed IPv6 literals (`[::1]`), and
+hostnames via `getaddrinfo()`. Display output uses `inet_ntop()` with column
+widths accommodating the longer IPv6 address format.
+
+### 13. How POOL Addresses Each Documented Failure Category
 
 | Failure Category | TCP/IP Problem | POOL Solution |
 |-----------------|---------------|---------------|

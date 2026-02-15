@@ -54,7 +54,8 @@ static long pool_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         struct pool_connect_req req;
         if (copy_from_user(&req, (void __user *)arg, sizeof(req)))
             return -EFAULT;
-        ret = pool_session_connect(req.peer_ip, req.peer_port);
+        ret = pool_session_connect(req.peer_addr, req.addr_family,
+                                   req.peer_port);
         break;
     }
     case POOL_IOC_SEND: {
@@ -125,8 +126,9 @@ static long pool_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             if (!s->active)
                 continue;
             infos[count].index = i;
-            infos[count].peer_ip = s->peer_ip;
+            memcpy(infos[count].peer_addr, s->peer_addr, 16);
             infos[count].peer_port = s->peer_port;
+            infos[count].addr_family = s->addr_family;
             infos[count].state = s->state;
             memcpy(infos[count].session_id, s->session_id, POOL_SESSION_ID_SIZE);
             infos[count].bytes_sent = s->bytes_sent;
