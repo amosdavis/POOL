@@ -47,6 +47,14 @@ Feature: POOL Kernel Module Robustness
     Then the fragment buffer is freed after 5 seconds
     And the fragment slot is available for new messages
 
+  # 1.4b HIGH — Fragment reassembly produces correct data
+  @high
+  Scenario: Fragmented message is reassembled correctly
+    Given a POOL session is established to "127.0.0.1" port 9253
+    When the peer sends a 50000-byte message that requires fragmentation
+    Then the receiver reassembles all fragments
+    And all 50000 bytes are received intact
+
   # 1.5 HIGH — Silent data truncation on recv
   @high
   Scenario: Receiving into a buffer smaller than the message returns EMSGSIZE
@@ -87,3 +95,11 @@ Feature: POOL Kernel Module Robustness
     When I attempt to establish a 65th session
     Then the connection returns error code ENOSPC
     And a warning is logged indicating the session limit
+
+  # 1.9 MEDIUM — Loss rate telemetry
+  @medium
+  Scenario: Loss rate telemetry tracks sequence gaps
+    Given a POOL session is established to "127.0.0.1" port 9253
+    When 100 packets are sent on the session
+    Then the telemetry loss_rate_ppm is updated
+    And the loss rate is a valid parts-per-million value

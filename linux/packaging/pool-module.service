@@ -1,0 +1,15 @@
+[Unit]
+Description=Load POOL kernel module
+DefaultDependencies=no
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/sbin/modprobe pool
+ExecStop=/sbin/modprobe -r pool
+ExecStartPost=/bin/sh -c 'mkdir -p /var/lib/pool /var/log/pool'
+
+[Install]
+WantedBy=multi-user.target

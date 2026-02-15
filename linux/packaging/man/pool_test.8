@@ -1,0 +1,38 @@
+.TH POOL_TEST 8 "2025" "POOL Protocol" "System Administration"
+.SH NAME
+pool_test \- POOL protocol testing and benchmarking tool
+.SH SYNOPSIS
+.B pool_test
+.I command
+.RI [ options ]
+.SH DESCRIPTION
+.B pool_test
+provides testing and benchmarking capabilities for the POOL protocol.
+It can verify connectivity, measure throughput, and stress-test the
+kernel module.
+.SH COMMANDS
+.TP
+.B bench \fIpeer_ip\fR [\fIsize_mb\fR]
+Run a throughput benchmark transferring the specified amount of data
+(default: 100 MB) to the peer and measuring encrypted transfer speed.
+.TP
+.B ping \fIpeer_ip\fR [\fIcount\fR]
+Send heartbeat packets and measure RTT. Defaults to 10 pings.
+.TP
+.B stress \fIpeer_ip\fR [\fIsessions\fR]
+Open multiple simultaneous sessions and transfer data to stress-test
+the module's concurrency handling.
+.SH OUTPUT
+Benchmark results include:
+.RS
+- Throughput in MB/s and Mbps
+.br
+- RTT (mean, min, max, jitter)
+.br
+- Packet loss rate (parts per million)
+.br
+- Rekey events during transfer
+.RE
+.SH SEE ALSO
+.BR poolctl (8),
+.BR poold (8)

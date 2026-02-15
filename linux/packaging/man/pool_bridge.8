@@ -1,0 +1,41 @@
+.TH POOL_BRIDGE 8 "2025" "POOL Protocol" "System Administration"
+.SH NAME
+pool_bridge \- TCP to POOL protocol bridge
+.SH SYNOPSIS
+.B pool_bridge
+.I mode
+.I args...
+.SH DESCRIPTION
+.B pool_bridge
+provides transparent bridging between TCP connections and POOL sessions.
+This enables legacy TCP applications to communicate over POOL without
+modification.
+.SH MODES
+.TP
+.B tcp2pool \fItcp_port pool_ip pool_port\fR
+Listen for TCP connections on
+.I tcp_port
+and forward each to a POOL session at
+.IR pool_ip:pool_port .
+.TP
+.B pool2tcp \fIpool_port tcp_ip tcp_port\fR
+Listen for POOL sessions on
+.I pool_port
+and forward each to a TCP connection at
+.IR tcp_ip:tcp_port .
+.SH EXAMPLES
+Bridge local port 8080 to POOL peer at 10.0.0.2:9253:
+.RS
+.B pool_bridge tcp2pool 8080 10.0.0.2 9253
+.RE
+.PP
+Receive POOL sessions and forward to local HTTP server:
+.RS
+.B pool_bridge pool2tcp 9253 127.0.0.1 80
+.RE
+.SH THREAD MODEL
+Each bridged connection gets a dedicated worker thread with bidirectional
+data relay. Maximum concurrent bridges is configurable (default: 64).
+.SH SEE ALSO
+.BR poolctl (8),
+.BR pool_migrate (8)

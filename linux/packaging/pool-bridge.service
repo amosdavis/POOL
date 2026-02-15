@@ -1,0 +1,22 @@
+[Unit]
+Description=POOL Bridge Daemon - TCP to POOL Protocol Bridge
+Documentation=man:pool_bridge(8)
+After=network-online.target pool-module.service
+Wants=network-online.target
+Requires=pool-module.service
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/pool/bridge.conf
+ExecStart=/usr/sbin/pool_bridge ${BRIDGE_MODE} ${BRIDGE_ARGS}
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/pool
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

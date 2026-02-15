@@ -1,3 +1,3 @@
 # Kbuild file for POOL (Protected Orchestrated Overlay Link) module
 obj-m := pool.o
-pool-objs := pool_main.o pool_crypto.o pool_net.o pool_session.o pool_data.o pool_telemetry.o pool_sysinfo.o pool_journal.o
+pool-objs := pool_main.o pool_crypto.o pool_net.o pool_session.o pool_data.o pool_telemetry.o pool_sysinfo.o pool_journal.o pool_mtu.o pool_config.o

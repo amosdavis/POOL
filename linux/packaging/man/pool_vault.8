@@ -1,0 +1,36 @@
+.TH POOL_VAULT 8 "2025" "POOL Protocol" "System Administration"
+.SH NAME
+pool_vault \- POOL encrypted file vault
+.SH SYNOPSIS
+.B pool_vault
+.I command
+.RI [ options ]
+.SH DESCRIPTION
+.B pool_vault
+provides encrypted file storage and transfer over the POOL protocol.
+Files are chunked, encrypted with the session key, and transferred
+using POOL channel 1.
+.SH COMMANDS
+.TP
+.B push \fIfile peer_ip\fR
+Encrypt and transfer a file to the specified POOL peer.
+.TP
+.B pull \fIfile peer_ip\fR
+Retrieve and decrypt a file from the specified POOL peer.
+.TP
+.B serve \fIdirectory\fR
+Serve files from the specified directory to incoming POOL requests.
+.TP
+.B status
+Show vault daemon status and recent transfer history.
+.SH PROTOCOL
+Vault uses POOL channel 1 for all file transfers. Files are split into
+chunks matching the session MTU, encrypted end-to-end, and reassembled
+on the receiver using POOL's fragment reassembly mechanism.
+.SH FILES
+.TP
+.I /var/lib/pool/vault/
+Default vault storage directory.
+.SH SEE ALSO
+.BR poolctl (8),
+.BR pool_relay (8)

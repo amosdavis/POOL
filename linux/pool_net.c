@@ -260,8 +260,19 @@ int pool_net_recv_packet(struct pool_session *sess,
         kfree(plain);
     }
 
-    /* Update remote sequence */
-    sess->crypto.remote_seq = be64_to_cpu(hdr->seq);
+    /* Update remote sequence and detect loss via gaps */
+    {
+        uint64_t remote_seq = be64_to_cpu(hdr->seq);
+
+        if (sess->expected_remote_seq > 0 &&
+            remote_seq > sess->expected_remote_seq) {
+            /* Sequence gap detected — count skipped seqs as lost */
+            sess->packets_lost +=
+                remote_seq - sess->expected_remote_seq;
+        }
+        sess->expected_remote_seq = remote_seq + 1;
+        sess->crypto.remote_seq = remote_seq;
+    }
 
     /* Update RTT from timestamp */
     if (be64_to_cpu(hdr->ack) == sess->crypto.local_seq && sess->last_send_ts) {

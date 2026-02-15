@@ -20,6 +20,8 @@ func TestFeatures(t *testing.T) {
 			InitializeKernelScenario(ctx)
 			InitializeBridgeScenario(ctx)
 			InitializeShimScenario(ctx)
+			InitializeVaultScenario(ctx)
+			InitializeRelayScenario(ctx)
 		},
 		Options: &opts,
 	}

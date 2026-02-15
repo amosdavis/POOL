@@ -1,0 +1,23 @@
+[Unit]
+Description=POOL Daemon - Protected Orchestrated Overlay Link
+Documentation=man:poold(8)
+After=network-online.target pool-module.service
+Wants=network-online.target
+Requires=pool-module.service
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/poold
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+LimitMEMLOCK=infinity
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/pool /var/log/pool /proc/pool
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

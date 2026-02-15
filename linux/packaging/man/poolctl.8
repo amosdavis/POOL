@@ -1,0 +1,85 @@
+.TH POOLCTL 8 "2025" "POOL Protocol" "System Administration"
+.SH NAME
+poolctl \- control the POOL kernel module
+.SH SYNOPSIS
+.B poolctl
+.I command
+.RI [ options ]
+.SH DESCRIPTION
+.B poolctl
+is the primary command-line tool for managing the POOL (Protected Orchestrated
+Overlay Link) kernel module. It communicates with the kernel module via
+.I /dev/pool
+ioctl interface.
+.SH COMMANDS
+.TP
+.B listen \fIport\fR
+Start a POOL listener on the specified port (default: 9253).
+.TP
+.B connect \fIip port\fR
+Initiate a POOL session to the given IP address and port.
+.TP
+.B send \fIsession_idx data\fR
+Send data on an established session.
+.TP
+.B recv \fIsession_idx\fR
+Receive data from an established session.
+.TP
+.B sessions
+List all active POOL sessions and their state.
+.TP
+.B close \fIsession_idx\fR
+Gracefully close a POOL session.
+.TP
+.B stop
+Stop the POOL listener and close all sessions.
+.SH IOCTL INTERFACE
+.B poolctl
+uses the following ioctl commands on
+.IR /dev/pool :
+.TP
+.B POOL_IOC_LISTEN
+Start a listener on the specified port.
+.TP
+.B POOL_IOC_CONNECT
+Initiate a session with handshake, puzzle, and key exchange.
+.TP
+.B POOL_IOC_SEND
+Send encrypted data on an established session.
+.TP
+.B POOL_IOC_RECV
+Receive and decrypt data from a session.
+.TP
+.B POOL_IOC_SESSIONS
+Query the list of active sessions.
+.TP
+.B POOL_IOC_CLOSE_SESS
+Gracefully close a specific session.
+.TP
+.B POOL_IOC_STOP
+Stop the listener and clean up all sessions.
+.SH FILES
+.TP
+.I /dev/pool
+Character device for ioctl communication.
+.TP
+.I /proc/pool/sessions
+Current session table (read-only).
+.TP
+.I /proc/pool/telemetry
+Per-session telemetry data.
+.TP
+.I /proc/pool/journal
+Change journal (recent events).
+.SH SECURITY
+All POOL sessions use X25519 key exchange, ChaCha20-Poly1305 AEAD encryption,
+and HMAC-SHA256 authentication. The kernel module runs crypto self-tests on
+load and refuses to initialize if any test fails.
+.SH SEE ALSO
+.BR poold (8),
+.BR pool_test (8),
+.BR pool_bridge (8),
+.BR pool_vault (8),
+.BR pool_relay (8)
+.SH AUTHORS
+POOL Protocol Team

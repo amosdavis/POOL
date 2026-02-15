@@ -1,0 +1,19 @@
+[Unit]
+Description=POOL Prometheus Exporter
+Documentation=man:pool_exporter(8)
+After=pool-module.service
+Wants=pool-module.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/lib/pool/pool_exporter.py --port 9254
+Restart=on-failure
+RestartSec=5
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/proc/pool
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

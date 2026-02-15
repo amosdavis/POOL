@@ -17,5 +17,11 @@ test-bridge:
 test-shim:
 	$(GODOG) --format pretty --tags @shim ./features/
 
+test-vault:
+	$(GODOG) --format pretty --tags @vault ./features/
+
+test-relay:
+	$(GODOG) --format pretty --tags @relay ./features/
+
 clean:
 	go clean -testcache

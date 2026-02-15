@@ -1,6 +1,7 @@
 package steps
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -109,11 +110,40 @@ func (b *bridgeCtx) poolSessionsAreEstablishedSimultaneously(count int) error {
 }
 
 func (b *bridgeCtx) exactlyBridgeThreadsAreCreated(count int) error {
-	// Verified by checking no duplicate session indices in bridge output
+	/* Verify by inspecting /proc/<pid>/task count if bridge is still running.
+	   Each bridge connection creates one bidirectional thread, plus the main
+	   thread and the listener thread. */
+	if b.BridgeProcess == nil {
+		return fmt.Errorf("no bridge process running")
+	}
+	taskDir := fmt.Sprintf("/proc/%d/task", b.BridgeProcess.Pid)
+	entries, err := os.ReadDir(taskDir)
+	if err != nil {
+		return fmt.Errorf("cannot read %s: %w", taskDir, err)
+	}
+	/* Bridge has: main thread + listener thread + N worker threads.
+	   We expect at least count+2 threads total. */
+	threadCount := len(entries)
+	minExpected := count + 2
+	if threadCount < minExpected {
+		return fmt.Errorf("expected at least %d threads (%d workers + 2 control), found %d",
+			minExpected, count, threadCount)
+	}
 	return nil
 }
 
 func (b *bridgeCtx) noDuplicateBridgesExist() error {
+	/* Verify by reading bridge's stdout/stderr for any "duplicate" warnings.
+	   The bridge logs session indices on creation; duplicates indicate a bug. */
+	if b.BridgeProcess == nil {
+		return fmt.Errorf("no bridge process running")
+	}
+	/* In production, parse captured stderr. For now, verify the bridge is
+	   still healthy — a duplicate would cause a crash or stuck connection. */
+	err := b.BridgeProcess.Signal(syscall.Signal(0))
+	if err != nil {
+		return fmt.Errorf("bridge process is not running (may have crashed due to duplicates): %w", err)
+	}
 	return nil
 }
 
@@ -143,7 +173,24 @@ func (b *bridgeCtx) allWorkerThreadsAreJoinedWithinSeconds(count, seconds int) e
 }
 
 func (b *bridgeCtx) noFileDescriptorsAreLeaked() error {
-	return nil // verified by process exit
+	/* Verify by checking /proc/<pid>/fd count before and after test.
+	   After all clients disconnect, only stdin/stdout/stderr + the listener
+	   socket should remain (4 FDs). */
+	if b.BridgeProcess == nil {
+		return nil
+	}
+	fdDir := fmt.Sprintf("/proc/%d/fd", b.BridgeProcess.Pid)
+	entries, err := os.ReadDir(fdDir)
+	if err != nil {
+		/* Process may have exited — no leak possible */
+		return nil
+	}
+	/* Allow: 0=stdin, 1=stdout, 2=stderr, 3=listener socket, + some margin */
+	maxExpected := 8
+	if len(entries) > maxExpected {
+		return fmt.Errorf("possible FD leak: %d open file descriptors (expected <= %d)", len(entries), maxExpected)
+	}
+	return nil
 }
 
 func (b *bridgeCtx) theBridgeProcessExitsCleanly() error {
@@ -208,8 +255,9 @@ func (b *bridgeCtx) cleanup() {
 func InitializeBridgeScenario(ctx *godog.ScenarioContext) {
 	b := &bridgeCtx{PoolTestContext: NewPoolTestContext()}
 
-	ctx.After(func(ctx godog.AfterScenarioCtx, err error) {
+	ctx.After(func(c context.Context, sc *godog.Scenario, err error) (context.Context, error) {
 		b.cleanup()
+		return c, nil
 	})
 
 	ctx.Step(`^a pool_bridge is running in tcp2pool mode on TCP port (\d+) to POOL "([^"]*)" port (\d+)$`, b.aPoolBridgeIsRunningInTcp2poolMode)

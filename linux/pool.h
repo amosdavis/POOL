@@ -227,6 +227,22 @@ struct pool_session_list {
 #define POOL_IOC_SESSIONS     _IOWR(POOL_IOC_MAGIC, 5, struct pool_session_list)
 #define POOL_IOC_CLOSE_SESS   _IOW(POOL_IOC_MAGIC, 6, uint32_t)
 #define POOL_IOC_STOP         _IO(POOL_IOC_MAGIC, 7)
+#define POOL_IOC_CHANNEL      _IOWR(POOL_IOC_MAGIC, 8, struct pool_channel_req)
+
+/* Channel management operations */
+#define POOL_CHAN_SUBSCRIBE    1  /* Subscribe to receive on this channel */
+#define POOL_CHAN_UNSUBSCRIBE  2  /* Unsubscribe from a channel */
+#define POOL_CHAN_LIST         3  /* List active channels for a session */
+
+/* Channel management request */
+struct pool_channel_req {
+    uint32_t session_idx;
+    uint8_t  channel;
+    uint8_t  operation;   /* POOL_CHAN_* */
+    uint16_t reserved;
+    uint32_t result;      /* out: result/count */
+    uint64_t data_ptr;    /* for LIST: pointer to uint8_t[256] bitmap */
+};
 
 /* ---- Fragment reassembly header ---- */
 struct pool_frag_header {

@@ -1,0 +1,44 @@
+.TH POOL_RELAY 8 "2025" "POOL Protocol" "System Administration"
+.SH NAME
+pool_relay \- POOL bandwidth relay with generosity scoring
+.SH SYNOPSIS
+.B pool_relay
+.I command
+.RI [ options ]
+.SH DESCRIPTION
+.B pool_relay
+implements the POOL incentive-compatible relay system. Nodes relay
+traffic for peers and earn a generosity score based on the ratio of
+bandwidth relayed for others versus bandwidth consumed.
+.SH COMMANDS
+.TP
+.B start
+Start the relay daemon.
+.TP
+.B stop
+Stop the relay daemon gracefully.
+.TP
+.B enroll \fIpeer_ip\fR
+Enroll with a peer relay for mutual bandwidth exchange.
+.TP
+.B status
+Show relay status, peer list, and generosity score.
+.SH GENEROSITY SCORE
+The generosity score is computed as:
+.RS
+.B score = bytes_relayed_for_peers / bytes_consumed_from_peers
+.RE
+.PP
+A score of 1.0 means equal contribution and consumption.
+Scores above 1.0 indicate a net contributor.
+Scores are exchanged between peers periodically and persist across restarts.
+.SH PROTOCOL
+Relay uses POOL channel 2 for control messages and score exchange.
+Data forwarding uses channel 0.
+.SH FILES
+.TP
+.I /var/lib/pool/relay_state.dat
+Persistent relay state (scores, peer list).
+.SH SEE ALSO
+.BR poolctl (8),
+.BR pool_vault (8)

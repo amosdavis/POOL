@@ -54,8 +54,15 @@ void pool_telemetry_record_send(struct pool_session *sess, uint32_t bytes)
 
 void pool_telemetry_record_recv(struct pool_session *sess, uint32_t bytes)
 {
-    /* Just track the receive side */
-    (void)bytes; /* Already counted in pool_net_recv_packet */
+    /* Update loss rate (parts per million).
+     * Total expected = packets_recv + packets_lost.
+     * Loss = packets_lost / (packets_recv + packets_lost) * 1,000,000 */
+    uint64_t total = sess->packets_recv + sess->packets_lost;
+
+    if (total > 0) {
+        sess->telemetry.loss_rate_ppm =
+            (uint32_t)((sess->packets_lost * 1000000ULL) / total);
+    }
 }
 
 /* ---- Heartbeat thread ---- */

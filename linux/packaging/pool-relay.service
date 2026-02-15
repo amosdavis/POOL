@@ -1,0 +1,23 @@
+[Unit]
+Description=POOL Relay Daemon - Bandwidth Incentive System
+Documentation=man:pool_relay(8)
+After=network-online.target pool-module.service
+Wants=network-online.target
+Requires=pool-module.service
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/pool_relay start
+ExecStop=/usr/sbin/pool_relay stop
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=65536
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/pool
+PrivateTmp=yes
+NoNewPrivileges=yes
+StateDirectory=pool
+
+[Install]
+WantedBy=multi-user.target

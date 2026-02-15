@@ -1,0 +1,41 @@
+.TH POOLD 8 "2025" "POOL Protocol" "System Administration"
+.SH NAME
+poold \- POOL protocol daemon
+.SH SYNOPSIS
+.B poold
+.RI [ options ]
+.SH DESCRIPTION
+.B poold
+is the POOL protocol daemon. It loads the pool kernel module (if not already
+loaded), starts a listener, and manages session lifecycle including automatic
+rekeying and heartbeat monitoring.
+.PP
+.B poold
+is typically started via systemd:
+.RS
+.B systemctl start poold
+.RE
+.SH OPTIONS
+.TP
+.B \-p \fIport\fR
+Listen on the specified port (default: 9253).
+.TP
+.B \-d
+Run in foreground (do not daemonize). Useful with systemd.
+.TP
+.B \-v
+Verbose logging to stderr.
+.SH FILES
+.TP
+.I /dev/pool
+POOL kernel module device.
+.TP
+.I /etc/pool/poold.conf
+Optional configuration file.
+.TP
+.I /var/lib/pool/
+State directory.
+.SH SEE ALSO
+.BR poolctl (8),
+.BR pool_bridge (8),
+.BR pool_relay (8)

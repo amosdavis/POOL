@@ -86,6 +86,8 @@ struct pool_session {
     uint64_t bytes_recv;
     uint64_t packets_sent;
     uint64_t packets_recv;
+    uint64_t expected_remote_seq; /* next expected remote seq for loss detection */
+    uint64_t packets_lost;        /* estimated lost packets (seq gaps) */
 
     /* Fragment reassembly */
     struct pool_frag_buf frags[16]; /* up to 16 concurrent fragmented msgs */
@@ -102,6 +104,17 @@ struct pool_session {
     struct mutex send_lock;   /* protects send_packet (seq, HMAC, socket write) */
     struct mutex crypto_lock; /* protects per-session crypto transforms */
     struct mutex lock;
+
+    /* MTU discovery (PMTUD) */
+    uint16_t mtu;              /* current effective MTU for this session */
+    uint16_t mtu_probe_lo;     /* binary search lower bound */
+    uint16_t mtu_probe_hi;     /* binary search upper bound */
+    uint8_t  mtu_probing;      /* 1 if probe in flight */
+    uint64_t mtu_last_probe;   /* ktime_get_ns() of last probe */
+    uint16_t mtu_probe_size;   /* size of current in-flight probe */
+
+    /* Channel subscriptions: bitmap of 256 channels */
+    uint8_t  channel_subs[32]; /* 256 bits = 32 bytes */
 };
 
 /* ---- Global module state ---- */
@@ -216,6 +229,11 @@ int pool_data_recv(struct pool_session *sess, uint8_t channel,
                    void *buf, uint32_t *len, int timeout_ms);
 int pool_data_send_fragmented(struct pool_session *sess, uint8_t channel,
                               const void *data, uint32_t len);
+int pool_data_handle_fragment(struct pool_session *sess,
+                              const uint8_t *payload, uint32_t plen,
+                              uint16_t flags, uint8_t channel,
+                              uint8_t **out_data, uint32_t *out_len,
+                              uint8_t *out_channel);
 
 /* pool_telemetry.c */
 int pool_telemetry_init(void);
@@ -223,6 +241,15 @@ void pool_telemetry_cleanup(void);
 void pool_telemetry_update_rtt(struct pool_session *sess, uint64_t rtt_ns);
 void pool_telemetry_record_send(struct pool_session *sess, uint32_t bytes);
 void pool_telemetry_record_recv(struct pool_session *sess, uint32_t bytes);
+
+/* pool_mtu.c */
+void pool_mtu_init_session(struct pool_session *sess);
+void pool_mtu_send_probe(struct pool_session *sess);
+void pool_mtu_handle_discover(struct pool_session *sess,
+                              const uint8_t *payload, uint32_t plen,
+                              uint16_t flags);
+void pool_mtu_probe_timeout(struct pool_session *sess);
+uint16_t pool_mtu_effective(struct pool_session *sess);
 
 /* pool_sysinfo.c */
 int pool_sysinfo_init(void);
@@ -233,5 +260,15 @@ int pool_journal_init(void);
 void pool_journal_cleanup(void);
 void pool_journal_add(uint16_t change_type, uint32_t ver_before,
                       uint32_t ver_after, const void *detail, int detail_len);
+
+/* pool_config.c */
+void pool_config_init(void);
+void pool_config_handle_config(struct pool_session *sess,
+                               const uint8_t *payload, uint32_t plen);
+void pool_config_handle_rollback(struct pool_session *sess,
+                                 const uint8_t *payload, uint32_t plen);
+void pool_config_check_deadline(struct pool_session *sess);
+void pool_config_confirm(struct pool_session *sess);
+uint32_t pool_config_version(void);
 
 #endif /* _POOL_INTERNAL_H */

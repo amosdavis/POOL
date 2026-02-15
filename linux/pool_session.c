@@ -97,7 +97,7 @@ void pool_session_free(struct pool_session *sess)
     /* Free fragment buffers */
     {
         int i;
-        for (i = 0; i < 4; i++) {
+        for (i = 0; i < ARRAY_SIZE(sess->frags); i++) {
             kfree(sess->frags[i].data);
             sess->frags[i].data = NULL;
         }
@@ -109,7 +109,12 @@ void pool_session_free(struct pool_session *sess)
     sess->bytes_recv = 0;
     sess->packets_sent = 0;
     sess->packets_recv = 0;
+    sess->expected_remote_seq = 0;
+    sess->packets_lost = 0;
     memset(&sess->telemetry, 0, sizeof(sess->telemetry));
+    pool_mtu_init_session(sess);
+    memset(sess->channel_subs, 0, sizeof(sess->channel_subs));
+    sess->channel_subs[0] = 0x01;  /* subscribe to channel 0 by default */
 }
 
 /* ---- Receiver thread ---- */
@@ -143,24 +148,62 @@ static int pool_rx_thread_fn(void *data)
 
         switch (pkt_type) {
         case POOL_PKT_DATA: {
-            /* Queue data for userspace recv */
-            struct pool_rx_entry *entry;
-            entry = kmalloc(sizeof(*entry), GFP_KERNEL);
-            if (!entry)
-                break;
-            entry->data = kmalloc(plen, GFP_KERNEL);
-            if (!entry->data) {
-                kfree(entry);
-                break;
-            }
-            memcpy(entry->data, payload, plen);
-            entry->len = plen;
-            entry->channel = hdr.channel;
+            uint16_t pkt_flags = be16_to_cpu(hdr.flags);
 
-            spin_lock(&sess->rx_lock);
-            list_add_tail(&entry->list, &sess->rx_queue);
-            spin_unlock(&sess->rx_lock);
-            wake_up_interruptible(&sess->rx_wait);
+            if (pkt_flags & POOL_FLAG_FRAGMENT) {
+                /* Fragmented packet — accumulate and reassemble */
+                uint8_t *assembled_data = NULL;
+                uint32_t assembled_len = 0;
+                uint8_t assembled_channel = 0;
+                int fret;
+
+                fret = pool_data_handle_fragment(sess, payload, plen,
+                                                  pkt_flags, hdr.channel,
+                                                  &assembled_data,
+                                                  &assembled_len,
+                                                  &assembled_channel);
+                if (fret == 1) {
+                    /* Reassembly complete — queue for userspace */
+                    struct pool_rx_entry *entry;
+                    entry = kmalloc(sizeof(*entry), GFP_KERNEL);
+                    if (!entry) {
+                        kfree(assembled_data);
+                        break;
+                    }
+                    entry->data = assembled_data;
+                    entry->len = assembled_len;
+                    entry->channel = assembled_channel;
+
+                    spin_lock(&sess->rx_lock);
+                    list_add_tail(&entry->list, &sess->rx_queue);
+                    spin_unlock(&sess->rx_lock);
+                    wake_up_interruptible(&sess->rx_wait);
+
+                    pool_telemetry_record_recv(sess, assembled_len);
+                } else if (fret < 0) {
+                    pr_warn("POOL: fragment handling error %d\n", fret);
+                }
+                /* fret == 0 means more fragments needed, nothing to queue */
+            } else {
+                /* Non-fragmented packet — queue directly */
+                struct pool_rx_entry *entry;
+                entry = kmalloc(sizeof(*entry), GFP_KERNEL);
+                if (!entry)
+                    break;
+                entry->data = kmalloc(plen, GFP_KERNEL);
+                if (!entry->data) {
+                    kfree(entry);
+                    break;
+                }
+                memcpy(entry->data, payload, plen);
+                entry->len = plen;
+                entry->channel = hdr.channel;
+
+                spin_lock(&sess->rx_lock);
+                list_add_tail(&entry->list, &sess->rx_queue);
+                spin_unlock(&sess->rx_lock);
+                wake_up_interruptible(&sess->rx_wait);
+            }
             break;
         }
         case POOL_PKT_ACK:
@@ -204,6 +247,19 @@ static int pool_rx_thread_fn(void *data)
             sess->state = POOL_STATE_CLOSING;
             break;
 
+        case POOL_PKT_DISCOVER:
+            pool_mtu_handle_discover(sess, payload, plen,
+                                     be16_to_cpu(hdr.flags));
+            break;
+
+        case POOL_PKT_CONFIG:
+            pool_config_handle_config(sess, payload, plen);
+            break;
+
+        case POOL_PKT_ROLLBACK:
+            pool_config_handle_rollback(sess, payload, plen);
+            break;
+
         default:
             pr_debug("POOL: unhandled packet type %d\n", pkt_type);
         }
@@ -227,6 +283,17 @@ static int pool_rx_thread_fn(void *data)
                 }
             }
         }
+
+        /* MTU probe timeout and periodic re-probing */
+        pool_mtu_probe_timeout(sess);
+        if (!sess->mtu_probing && sess->mtu_last_probe > 0) {
+            uint64_t now = ktime_get_ns();
+            if (now - sess->mtu_last_probe > 60ULL * 1000000000ULL)
+                pool_mtu_send_probe(sess);
+        }
+
+        /* Check config rollback deadlines */
+        pool_config_check_deadline(sess);
     }
 
     kfree(payload);
@@ -426,6 +493,9 @@ int pool_session_connect(uint32_t ip, uint16_t port)
             sess_idx, &ip, port);
     pool_journal_add(POOL_JOURNAL_CONNECT, 0, 0, "connect", 7);
 
+    /* Initiate MTU discovery */
+    pool_mtu_send_probe(sess);
+
     return sess_idx;
 }
 
@@ -617,6 +687,9 @@ int pool_session_accept(struct socket *client_sock)
     pr_info("POOL: session %d accepted from %pI4h:%d\n",
             sess_idx, &sess->peer_ip, sess->peer_port);
     pool_journal_add(POOL_JOURNAL_CONNECT, 0, 0, "accept", 6);
+
+    /* Initiate MTU discovery */
+    pool_mtu_send_probe(sess);
 
     return sess_idx;
 }

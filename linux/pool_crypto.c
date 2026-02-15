@@ -25,8 +25,140 @@
 /* Global HMAC tfm for key derivation (not session-specific) */
 static struct crypto_shash *pool_hmac_tfm;
 
+/*
+ * Self-test: Known-answer test for HMAC-SHA256.
+ * RFC 4231 Test Case 2: key = "Jefe", data = "what do ya want for nothing?"
+ * Expected HMAC: 5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843
+ */
+static int pool_crypto_selftest_hmac(void)
+{
+    static const uint8_t key[] = "Jefe";
+    static const uint8_t data[] = "what do ya want for nothing?";
+    static const uint8_t expected[32] = {
+        0x5b, 0xdc, 0xc1, 0x46, 0xbf, 0x60, 0x75, 0x4e,
+        0x6a, 0x04, 0x24, 0x26, 0x08, 0x95, 0x75, 0xc7,
+        0x5a, 0x00, 0x3f, 0x08, 0x9d, 0x27, 0x39, 0x83,
+        0x9d, 0xec, 0x58, 0xb9, 0x64, 0xec, 0x38, 0x43
+    };
+    uint8_t result[32];
+    SHASH_DESC_ON_STACK(desc, pool_hmac_tfm);
+    int ret;
+
+    desc->tfm = pool_hmac_tfm;
+    ret = crypto_shash_setkey(pool_hmac_tfm, key, 4);
+    if (ret)
+        return ret;
+    ret = crypto_shash_init(desc);
+    if (ret)
+        return ret;
+    ret = crypto_shash_update(desc, data, 28);
+    if (ret)
+        return ret;
+    ret = crypto_shash_final(desc, result);
+    if (ret)
+        return ret;
+
+    if (memcmp(result, expected, 32) != 0) {
+        pr_err("POOL: HMAC-SHA256 self-test FAILED\n");
+        return -EACCES;
+    }
+    return 0;
+}
+
+/*
+ * Self-test: Verify ChaCha20-Poly1305 AEAD round-trip.
+ * Encrypt a known plaintext and verify decryption recovers it.
+ */
+static int pool_crypto_selftest_aead(void)
+{
+    struct crypto_aead *tfm;
+    struct aead_request *req;
+    struct scatterlist sg_src, sg_dst;
+    static const uint8_t key[32] = {
+        0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
+        0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f,
+        0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97,
+        0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f
+    };
+    static const uint8_t nonce[12] = {
+        0x07, 0x00, 0x00, 0x00, 0x40, 0x41, 0x42, 0x43,
+        0x44, 0x45, 0x46, 0x47
+    };
+    static const uint8_t plain[] = "POOL self-test";
+    uint8_t *buf;
+    int ret;
+    size_t plen = sizeof(plain) - 1;
+
+    tfm = crypto_alloc_aead("rfc7539(chacha20,poly1305)", 0, 0);
+    if (IS_ERR(tfm))
+        return PTR_ERR(tfm);
+
+    crypto_aead_setauthsize(tfm, POOL_TAG_SIZE);
+    ret = crypto_aead_setkey(tfm, key, sizeof(key));
+    if (ret)
+        goto out_free_tfm;
+
+    buf = kzalloc(plen + POOL_TAG_SIZE, GFP_KERNEL);
+    if (!buf) {
+        ret = -ENOMEM;
+        goto out_free_tfm;
+    }
+    memcpy(buf, plain, plen);
+
+    req = aead_request_alloc(tfm, GFP_KERNEL);
+    if (!req) {
+        ret = -ENOMEM;
+        goto out_free_buf;
+    }
+
+    /* Encrypt */
+    sg_init_one(&sg_src, buf, plen + POOL_TAG_SIZE);
+    sg_init_one(&sg_dst, buf, plen + POOL_TAG_SIZE);
+    aead_request_set_crypt(req, &sg_src, &sg_dst, plen, (u8 *)nonce);
+    aead_request_set_ad(req, 0);
+    ret = crypto_aead_encrypt(req);
+    if (ret)
+        goto out_free_req;
+
+    /* Verify ciphertext differs from plaintext */
+    if (memcmp(buf, plain, plen) == 0) {
+        pr_err("POOL: AEAD self-test FAILED (ciphertext == plaintext)\n");
+        ret = -EACCES;
+        goto out_free_req;
+    }
+
+    /* Decrypt */
+    sg_init_one(&sg_src, buf, plen + POOL_TAG_SIZE);
+    sg_init_one(&sg_dst, buf, plen + POOL_TAG_SIZE);
+    aead_request_set_crypt(req, &sg_src, &sg_dst, plen + POOL_TAG_SIZE,
+                           (u8 *)nonce);
+    aead_request_set_ad(req, 0);
+    ret = crypto_aead_decrypt(req);
+    if (ret)
+        goto out_free_req;
+
+    /* Verify round-trip */
+    if (memcmp(buf, plain, plen) != 0) {
+        pr_err("POOL: AEAD self-test FAILED (decrypted != original)\n");
+        ret = -EACCES;
+        goto out_free_req;
+    }
+
+    ret = 0;
+
+out_free_req:
+    aead_request_free(req);
+out_free_buf:
+    kfree(buf);
+out_free_tfm:
+    crypto_free_aead(tfm);
+    return ret;
+}
+
 int pool_crypto_init(void)
 {
+    int ret;
+
     pool_hmac_tfm = crypto_alloc_shash("hmac(sha256)", 0, 0);
     if (IS_ERR(pool_hmac_tfm)) {
         pr_err("POOL: failed to allocate hmac(sha256): %ld\n",
@@ -34,7 +166,25 @@ int pool_crypto_init(void)
         pool_hmac_tfm = NULL;
         return -ENOMEM;
     }
-    pr_info("POOL: crypto subsystem initialized\n");
+
+    /* Run mandatory self-tests (SECURITY.md §3.4) */
+    ret = pool_crypto_selftest_hmac();
+    if (ret) {
+        pr_err("POOL: HMAC-SHA256 self-test failed, refusing to load\n");
+        crypto_free_shash(pool_hmac_tfm);
+        pool_hmac_tfm = NULL;
+        return ret;
+    }
+
+    ret = pool_crypto_selftest_aead();
+    if (ret) {
+        pr_err("POOL: ChaCha20-Poly1305 self-test failed, refusing to load\n");
+        crypto_free_shash(pool_hmac_tfm);
+        pool_hmac_tfm = NULL;
+        return ret;
+    }
+
+    pr_info("POOL: crypto subsystem initialized (self-tests passed)\n");
     return 0;
 }
 

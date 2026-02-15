@@ -162,6 +162,36 @@ static long pool_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
     case POOL_IOC_STOP:
         pool_net_stop_listen();
         break;
+    case POOL_IOC_CHANNEL: {
+        struct pool_channel_req creq;
+        struct pool_session *s;
+        if (copy_from_user(&creq, (void __user *)arg, sizeof(creq)))
+            return -EFAULT;
+        if (creq.session_idx >= POOL_MAX_SESSIONS)
+            return -EINVAL;
+        s = &pool.sessions[creq.session_idx];
+        if (!s->active)
+            return -ENOENT;
+        switch (creq.operation) {
+        case POOL_CHAN_SUBSCRIBE:
+            s->channel_subs[creq.channel / 8] |= (1 << (creq.channel % 8));
+            break;
+        case POOL_CHAN_UNSUBSCRIBE:
+            s->channel_subs[creq.channel / 8] &= ~(1 << (creq.channel % 8));
+            break;
+        case POOL_CHAN_LIST:
+            if (copy_to_user((void __user *)creq.data_ptr,
+                             s->channel_subs, sizeof(s->channel_subs)))
+                return -EFAULT;
+            creq.result = POOL_MAX_CHANNELS;
+            if (copy_to_user((void __user *)arg, &creq, sizeof(creq)))
+                return -EFAULT;
+            break;
+        default:
+            return -EINVAL;
+        }
+        break;
+    }
     default:
         ret = -ENOTTY;
     }
@@ -241,6 +271,8 @@ static int __init pool_init(void)
     ret = pool_sysinfo_init();
     if (ret)
         goto err_sysinfo;
+
+    pool_config_init();
 
     pr_info("POOL: initialized, /dev/pool created (major=%d)\n", pool.major);
     return 0;
