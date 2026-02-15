@@ -164,3 +164,113 @@ These are features the spec promises but the code doesn't implement yet.
 | 17 | **P0** | IP proto 253 native (1.5) | ✅ Done |
 | 18 | **P0** | Peer discovery (5.3) | ✅ Done |
 | 19 | **P0** | Post-quantum crypto (5.1) | ✅ Done |
+
+## Phase 6: Failure Mode Hardening
+
+All 52 identified failure modes have been addressed across 8 implementation phases.
+
+### 6.1 Memory Safety (8 fixes) — ✅ DONE
+- M01: Fragment reassembly buffer overflow bounds checking
+- M02: Session table out-of-bounds index validation
+- M03: Peer table overflow with LRU eviction
+- M04: Telemetry counter overflow with rollover detection
+- M05: Config payload size validation
+- M06: Journal circular buffer overflow protection
+- M07: MTU probe size bounds clamping
+- M08: Discovery packet length validation
+
+### 6.2 Cryptographic Failures (7 fixes) — ✅ DONE
+- C01: ChaCha20-Poly1305 nonce reuse prevention (sequence-based + rekey)
+- C02: X25519 weak key rejection (all-zero and low-order point checks)
+- C03: HMAC verification timing attack mitigation (constant-time compare)
+- C04: HKDF output length validation
+- C05: Key rotation deadline enforcement
+- C06: Self-test failure hard abort
+- C07: Random number generation failure detection
+
+### 6.3 Platform Crypto Failures (3 fixes) — ✅ DONE
+- D01: macOS OpenSSL EVP-based ChaCha20-Poly1305 and X25519
+- D02: BSD OpenSSL fallback for all crypto operations
+- W01: Windows BCrypt ChaCha20-Poly1305 fail-hard (no AES-GCM fallback — violates POOL design tenet of fixed cipher suite)
+
+### 6.4 Network Failures (7 fixes) — ✅ DONE
+- N01: TCP connect timeout (10-second SO_SNDTIMEO)
+- N02: Anti-replay window (64-packet sliding window)
+- N03: Half-open connection detection via keepalive
+- N04: Listen socket cleanup on module unload
+- N05: Raw IP socket permission check
+- N06: Fragment timeout for incomplete reassembly
+- N07: Multicast TTL scoping for discovery
+
+### 6.5 Module Lifecycle (6 fixes) — ✅ DONE
+- L01: Module unload with active sessions (forced teardown)
+- L02: Double module load prevention (state checks)
+- L03: Character device registration failure rollback
+- L04: Proc filesystem entry cleanup
+- L05: Kernel thread stop ordering
+- L06: Workqueue flush before module exit
+
+### 6.6 Session & Configuration (9 fixes) — ✅ DONE
+- S01: Handshake timeout enforcement
+- S02: Session state machine invalid transition rejection
+- S03: Concurrent ioctl serialization
+- S04: Config version mismatch detection
+- S05: Rollback timer race condition prevention
+- S06: Channel subscription bitmap overflow check
+- S07: Peer exchange flooding rate limit
+- S08: Discovery thread restart after failure
+- S09: DKMS build failure recovery
+
+### 6.7 Protocol Specification (5 fixes) — ✅ DONE
+- Amended SECURITY.md §5 with fixed cipher suite policy
+- Amended SECURITY.md §6.1 with v1 design philosophy (no negotiation)
+- Amended SECURITY.md §7 with vulnerability disclosure process
+- Amended SECURITY.md §8 with cipher agility roadmap for v2+
+- Added PROTOCOL.md §9 wire format versioning rules
+
+### 6.8 BDD Test Coverage (7 additions) — ✅ DONE
+- 52 BDD scenarios in `tests/features/failure_modes.feature`
+- Step definitions in `tests/steps/failure_mode_steps.go`
+- Coverage across all 8 failure categories
+
+## Phase 7: Design Tenet Enforcement
+
+### 7.1 AES-GCM Cipher Fallback Removal — ✅ DONE
+- Removed AES-256-GCM fallback from `windows/pool_win_platform.c` encrypt and decrypt functions
+- POOL design mandates fixed cipher suite (ChaCha20-Poly1305) with no negotiation or fallback
+- Windows platform now fails hard if ChaCha20-Poly1305 is unavailable via BCrypt
+- Updated W01 BDD scenario to verify fail-hard behavior instead of fallback
+
+## Phase 8: CI/CD Pipeline & Packaging
+
+### 8.1 GitHub Actions Workflows — ✅ DONE
+
+Four workflows covering all platforms:
+
+| Workflow | File | Trigger | Status |
+|----------|------|---------|--------|
+| Kernel Module Build | `kernel-build.yml` | push/PR to linux/, common/ | ✅ Passing |
+| Windows Build | `windows-build.yml` | push/PR to windows/, common/ | ✅ Passing |
+| macOS Build | `macos-build.yml` | push/PR to macos/, common/, bridge/, vault/, relay/ | ✅ Passing |
+| Debian Package & APT Repo | `debian-package.yml` | push/PR + workflow_dispatch + v* tags | ✅ Passing |
+
+### 8.2 Debian Packaging — ✅ DONE
+- `debian/` directory with 10 files (control, rules, changelog, copyright, compat, source/format, pool-dkms.dkms, pool-dkms.install, pool-tools.install, pool-tools.manpages)
+- Two binary packages: `pool-dkms` (kernel module via DKMS) and `pool-tools` (all userspace binaries)
+- dpkg-buildpackage produces .deb artifacts uploaded to GitHub Actions
+
+### 8.3 Cross-Platform Build Fixes — ✅ DONE
+- Kernel: `class_create()` API compat for kernel 6.4+, `sock_setsockopt` for removed `kernel_setsockopt`, `sockaddr_in6` include, `pool_net_set_keepalive` forward declaration, ML-KEM NTT zeta constants completion
+- Windows: MinGW BCrypt constant stubs, `-municode` for `wmain` entry point, `winsock2.h` include ordering, `__thread` TLS syntax
+- macOS: OpenSSL EVP includes in `__APPLE__` block, `errno.h` in pool_migrate.c, pkgbuild version extraction fix
+
+### 8.4 APT Repository Publishing — ✅ DONE (on v* tag push)
+- GitHub Pages on `gh-pages` branch
+- `apt-ftparchive` for Packages/Release generation
+- GPG-signed Release file (requires `GPG_PRIVATE_KEY` Actions secret)
+- Install instructions auto-generated in index.html
+
+### 8.5 Platform-Specific Packaging — ✅ DONE
+- macOS: `.pkg` installer via `pkgbuild --identifier com.pool.protocol`
+- Windows: `pool_service.exe` via MinGW cross-compilation
+- Both attached to GitHub Release on v* tag push
