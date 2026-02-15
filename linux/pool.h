@@ -1,7 +1,7 @@
 /*
  * pool.h - POOL Protocol public API header
  *
- * Protected Orchestrated Overlay Link (POOL) v1.0
+ * Protected Orchestrated Overlay Link (POOL) v1.0.0
  * Shared between kernel module and userspace tools.
  */
 #ifndef _POOL_H
