@@ -285,7 +285,13 @@ Error categories:
 | 0x09 | OVERLOAD | Node is overloaded (backpressure signal) |
 | 0x0A | VERSION_MISMATCH | Protocol version incompatible |
 
-### 11. How POOL Addresses Each Documented Failure Category
+### 11. Security Vulnerability Response
+
+See [`SECURITY.md`](SECURITY.md) for the complete vulnerability response playbook,
+including triage procedures, emergency patching, crypto-specific incident playbooks,
+and version transition guidance.
+
+### 12. How POOL Addresses Each Documented Failure Category
 
 | Failure Category | TCP/IP Problem | POOL Solution |
 |-----------------|---------------|---------------|

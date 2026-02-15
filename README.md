@@ -180,6 +180,10 @@ pool_relay status                   # Check reputation score
 ```
 See [`spec/OPERATORS.md`](spec/OPERATORS.md) for the incentive model.
 
+## Security
+
+See [`spec/SECURITY.md`](spec/SECURITY.md) for the vulnerability response playbook covering triage, coordinated disclosure, emergency patching, crypto-specific incident procedures, and version transition guidance.
+
 ## Test Results
 
 ```
@@ -198,6 +202,7 @@ POOL/
 ├── README.md
 ├── spec/
 │   ├── PROTOCOL.md           # Complete protocol specification
+│   ├── SECURITY.md           # Vulnerability response playbook
 │   ├── MIGRATION.md          # Three-phase TCP→POOL migration strategy
 │   ├── OPERATORS.md          # Network operator incentive structure
 │   └── STALLED_PROTOCOLS.md  # Analysis of 18 failed protocols
