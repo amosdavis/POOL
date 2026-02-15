@@ -1,0 +1,152 @@
+name: Debian Package & APT Repository
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  pages: write
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            dpkg-dev debhelper dh-dkms fakeroot \
+            build-essential linux-headers-generic \
+            apt-utils gpg
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION=$(grep PACKAGE_VERSION linux/packaging/dkms.conf | cut -d'"' -f2)
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          echo "dkms=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VERSION (tag: $TAG_VERSION)"
+
+      - name: Make debian/rules executable
+        run: chmod +x debian/rules
+
+      - name: Build Debian packages
+        run: dpkg-buildpackage -us -uc -b --no-sign
+
+      - name: Collect .deb files
+        run: |
+          mkdir -p dist
+          cp ../*.deb dist/
+          ls -la dist/
+
+      - name: Upload .deb artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: debian-packages
+          path: dist/*.deb
+
+      - name: Import GPG key
+        if: ${{ env.GPG_PRIVATE_KEY != '' }}
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          GPG_KEY_ID=$(gpg --list-secret-keys --keyid-format long 2>/dev/null \
+                       | grep sec | head -1 | awk '{print $2}' | cut -d/ -f2)
+          echo "GPG_KEY_ID=$GPG_KEY_ID" >> "$GITHUB_ENV"
+          # Export public key for repo consumers
+          gpg --armor --export "$GPG_KEY_ID" > dist/pool.gpg
+
+      - name: Publish to GitHub Pages APT repository
+        if: ${{ env.GPG_PRIVATE_KEY != '' }}
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          # Configure git
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Clone or create gh-pages branch
+          REPO_URL="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            git clone --single-branch --branch gh-pages "$REPO_URL" gh-pages-dir
+          else
+            mkdir gh-pages-dir
+            cd gh-pages-dir
+            git init
+            git checkout -b gh-pages
+            git remote add origin "$REPO_URL"
+            cd ..
+          fi
+
+          # Set up APT repo structure
+          mkdir -p gh-pages-dir/pool/dists/stable/main/binary-amd64
+          mkdir -p gh-pages-dir/pool/pool/main
+
+          # Copy .deb files
+          cp dist/*.deb gh-pages-dir/pool/pool/main/
+
+          # Copy GPG public key
+          cp dist/pool.gpg gh-pages-dir/pool/pool.gpg
+
+          cd gh-pages-dir/pool
+
+          # Generate Packages file
+          apt-ftparchive packages pool/main > dists/stable/main/binary-amd64/Packages
+          gzip -kf dists/stable/main/binary-amd64/Packages
+
+          # Generate Release file
+          cd dists/stable
+          apt-ftparchive release . > Release
+
+          # Sign Release file
+          gpg --batch --yes --armor --detach-sign -o Release.gpg Release
+          gpg --batch --yes --armor --clearsign -o InRelease Release
+
+          cd ../../..
+
+          # Create index.html with install instructions
+          OWNER=$(echo "$GITHUB_REPOSITORY" | cut -d/ -f1)
+          REPO=$(echo "$GITHUB_REPOSITORY" | cut -d/ -f2)
+          cat > gh-pages-dir/index.html <<EOF
+          <!DOCTYPE html>
+          <html>
+          <head><title>POOL APT Repository</title></head>
+          <body>
+          <h1>POOL APT Repository</h1>
+          <h2>Installation</h2>
+          <pre>
+          # Import GPG key
+          curl -fsSL https://${OWNER}.github.io/${REPO}/pool/pool.gpg | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pool.gpg
+
+          # Add repository
+          echo "deb https://${OWNER}.github.io/${REPO}/pool stable main" | sudo tee /etc/apt/sources.list.d/pool.list
+
+          # Install
+          sudo apt update
+          sudo apt install pool-dkms pool-tools
+          </pre>
+          </body>
+          </html>
+          EOF
+
+          # Commit and push
+          cd gh-pages-dir
+          git add -A
+          git commit -m "Update APT repository: ${{ steps.version.outputs.tag }}"
+          git push origin gh-pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Attach .deb to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.deb

@@ -1,0 +1,85 @@
+name: macOS Build
+
+on:
+  push:
+    branches: [master]
+    tags:
+      - 'v*'
+    paths:
+      - 'macos/**'
+      - 'common/**'
+      - 'bridge/**'
+      - 'vault/**'
+      - 'relay/**'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'macos/**'
+      - 'common/**'
+      - 'bridge/**'
+      - 'vault/**'
+      - 'relay/**'
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install OpenSSL
+        run: brew install openssl@3
+
+      - name: Build POOL for macOS
+        run: make -C macos OPENSSL_PREFIX=$(brew --prefix openssl@3)
+
+      - name: Verify binaries
+        run: |
+          test -f macos/poold_darwin
+          file macos/poold_darwin
+          test -f bridge/pool_bridge
+          test -f vault/pool_vault
+          test -f relay/pool_relay
+
+      - name: Create .pkg installer
+        run: |
+          VERSION=$(grep PACKAGE_VERSION linux/packaging/dkms.conf | cut -d'"' -f2)
+
+          # Stage install layout
+          STAGE=$(mktemp -d)
+          mkdir -p "$STAGE/usr/local/sbin"
+          mkdir -p "$STAGE/Library/LaunchDaemons"
+
+          cp macos/poold_darwin "$STAGE/usr/local/sbin/"
+          cp bridge/pool_bridge "$STAGE/usr/local/sbin/"
+          cp bridge/pool_migrate "$STAGE/usr/local/sbin/"
+          cp vault/pool_vault "$STAGE/usr/local/sbin/"
+          cp relay/pool_relay "$STAGE/usr/local/sbin/"
+          cp macos/com.pool.protocol.plist "$STAGE/Library/LaunchDaemons/"
+
+          pkgbuild \
+            --root "$STAGE" \
+            --identifier com.pool.protocol \
+            --version "$VERSION" \
+            --install-location / \
+            "pool-${VERSION}.pkg"
+
+          rm -rf "$STAGE"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pool-macos
+          path: |
+            macos/poold_darwin
+            bridge/pool_bridge
+            bridge/pool_migrate
+            vault/pool_vault
+            relay/pool_relay
+            pool-*.pkg
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: pool-*.pkg

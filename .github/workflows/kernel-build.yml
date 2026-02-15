@@ -1,0 +1,104 @@
+name: Kernel Module Build
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'linux/**'
+      - 'common/**'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'linux/**'
+      - 'common/**'
+
+jobs:
+  build-kernel-module:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel:
+          - '6.1.0-28'
+          - '6.6.0-14'
+          - '6.8.0-11'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Find available kernel headers
+        id: headers
+        run: |
+          sudo apt-get update -qq
+          # Search for the closest matching headers package
+          TARGET="${{ matrix.kernel }}"
+          MAJOR_MINOR=$(echo "$TARGET" | cut -d. -f1-2)
+
+          # Try exact match first, then prefix match, then major.minor
+          PKG=$(apt-cache search "linux-headers-${TARGET}" 2>/dev/null | head -1 | awk '{print $1}') || true
+          if [ -z "$PKG" ]; then
+            PKG=$(apt-cache search "linux-headers-${MAJOR_MINOR}" 2>/dev/null \
+                  | grep -v cloud -m1 | awk '{print $1}') || true
+          fi
+          if [ -z "$PKG" ]; then
+            PKG=$(apt-cache search "linux-headers-" 2>/dev/null \
+                  | grep "generic" | grep -v cloud | head -1 | awk '{print $1}') || true
+          fi
+
+          echo "package=$PKG" >> "$GITHUB_OUTPUT"
+          echo "Selected headers package: $PKG"
+
+      - name: Install kernel headers and build tools
+        run: |
+          sudo apt-get install -y --no-install-recommends \
+            ${{ steps.headers.outputs.package }} \
+            build-essential bc kmod
+
+      - name: Determine KDIR
+        id: kdir
+        run: |
+          # Find the installed headers directory
+          KDIR=$(ls -d /usr/src/linux-headers-* 2>/dev/null | grep -v common | tail -1)
+          if [ -z "$KDIR" ]; then
+            KDIR=$(ls -d /usr/src/linux-headers-* 2>/dev/null | tail -1)
+          fi
+          echo "path=$KDIR" >> "$GITHUB_OUTPUT"
+          echo "Using KDIR: $KDIR"
+
+      - name: Build kernel module
+        run: make -C linux KDIR=${{ steps.kdir.outputs.path }}
+
+      - name: Verify pool.ko
+        run: |
+          test -f linux/pool.ko
+          modinfo linux/pool.ko
+
+      - name: Build userspace tools
+        run: make -C linux tools
+
+      - name: Build bridge
+        run: make -C bridge
+
+      - name: Build shim
+        run: make -C shim
+
+      - name: Build relay
+        run: make -C relay
+
+      - name: Build vault
+        run: make -C vault
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pool-build-${{ matrix.kernel }}
+          path: |
+            linux/pool.ko
+            linux/poolctl
+            linux/poold
+            linux/pool_test
+            bridge/pool_bridge
+            bridge/pool_migrate
+            shim/libpool_shim.so
+            relay/pool_relay
+            vault/pool_vault

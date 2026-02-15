@@ -1,0 +1,47 @@
+name: Windows Build
+
+on:
+  push:
+    branches: [master]
+    tags:
+      - 'v*'
+    paths:
+      - 'windows/**'
+      - 'common/**'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'windows/**'
+      - 'common/**'
+
+jobs:
+  build-windows:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install MinGW
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+
+      - name: Build pool_service.exe
+        run: make -C windows CC=x86_64-w64-mingw32-gcc
+
+      - name: Verify executable
+        run: |
+          test -f windows/pool_service.exe
+          file windows/pool_service.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pool-windows-amd64
+          path: windows/pool_service.exe
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: windows/pool_service.exe
