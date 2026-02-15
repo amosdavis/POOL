@@ -50,6 +50,9 @@ int pool_data_send_fragmented(struct pool_session *sess, uint8_t channel,
     uint32_t msg_id = sess->next_msg_id++;
     int ret;
 
+    if (len > 0xFFFF)
+        return -EMSGSIZE;
+
     while (offset < len) {
         uint32_t chunk = len - offset;
         uint16_t flags = POOL_FLAG_FRAGMENT | POOL_FLAG_REQUIRE_ACK;
@@ -140,16 +143,18 @@ int pool_data_recv(struct pool_session *sess, uint8_t channel,
         return -EAGAIN;
     }
 
+    if (entry->len > *len) {
+        /* Buffer too small — report required size, leave entry in queue */
+        *len = entry->len;
+        spin_unlock(&sess->rx_lock);
+        return -EMSGSIZE;
+    }
+
     list_del(&entry->list);
     spin_unlock(&sess->rx_lock);
 
-    if (entry->len > *len) {
-        /* Truncate */
-        memcpy(buf, entry->data, *len);
-    } else {
-        memcpy(buf, entry->data, entry->len);
-        *len = entry->len;
-    }
+    memcpy(buf, entry->data, entry->len);
+    *len = entry->len;
 
     kfree(entry->data);
     kfree(entry);

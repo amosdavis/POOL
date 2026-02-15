@@ -60,7 +60,7 @@ static long pool_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         void *kdata;
         if (copy_from_user(&req, (void __user *)arg, sizeof(req)))
             return -EFAULT;
-        if (req.len > POOL_MAX_PAYLOAD * 16 || req.len == 0)
+        if (req.len > POOL_MAX_PAYLOAD || req.len == 0)
             return -EINVAL;
         if (req.session_idx >= POOL_MAX_SESSIONS)
             return -EINVAL;
@@ -82,7 +82,7 @@ static long pool_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         uint32_t got;
         if (copy_from_user(&req, (void __user *)arg, sizeof(req)))
             return -EFAULT;
-        if (req.len > POOL_MAX_PAYLOAD * 16 || req.len == 0)
+        if (req.len > POOL_MAX_PAYLOAD || req.len == 0)
             return -EINVAL;
         if (req.session_idx >= POOL_MAX_SESSIONS)
             return -EINVAL;
@@ -271,6 +271,11 @@ static void __exit pool_exit(void)
     pr_info("POOL: shutting down\n");
 
     pool_net_stop_listen();
+
+    /* Flush workqueue before closing sessions to ensure no pending
+     * work items reference session state during cleanup. */
+    if (pool.wq)
+        flush_workqueue(pool.wq);
 
     /* Close all sessions */
     for (i = 0; i < POOL_MAX_SESSIONS; i++) {

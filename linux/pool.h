@@ -26,6 +26,7 @@
 #define POOL_TAG_SIZE           16  /* Poly1305 */
 #define POOL_ADDR_SIZE          32  /* 256-bit address */
 #define POOL_MAX_PAYLOAD        65535
+#define POOL_LISTEN_BACKLOG     128
 #define POOL_DEFAULT_MTU        1400
 #define POOL_MIN_MTU            512
 #define POOL_HEARTBEAT_SEC      5

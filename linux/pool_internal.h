@@ -88,7 +88,7 @@ struct pool_session {
     uint64_t packets_recv;
 
     /* Fragment reassembly */
-    struct pool_frag_buf frags[4]; /* up to 4 concurrent fragmented msgs */
+    struct pool_frag_buf frags[16]; /* up to 16 concurrent fragmented msgs */
     uint32_t next_msg_id;
 
     /* Receive queue */
@@ -189,6 +189,7 @@ void pool_net_cleanup(void);
 int pool_net_listen(uint16_t port);
 void pool_net_stop_listen(void);
 int pool_net_connect(struct pool_session *sess, uint32_t ip, uint16_t port);
+void pool_net_set_sock_rcvtimeo(struct socket *sock, int seconds);
 int pool_net_send_raw(struct socket *sock, void *buf, int len);
 int pool_net_recv_raw(struct socket *sock, void *buf, int len);
 int pool_net_send_packet(struct pool_session *sess, uint8_t type,

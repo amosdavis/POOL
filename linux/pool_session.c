@@ -59,6 +59,7 @@ struct pool_session *pool_session_alloc(void)
         }
     }
     mutex_unlock(&pool.sessions_lock);
+    pr_warn("POOL: session limit reached (%d)\n", POOL_MAX_SESSIONS);
     return NULL;
 }
 
@@ -66,13 +67,18 @@ void pool_session_free(struct pool_session *sess)
 {
     struct pool_rx_entry *entry, *tmp;
 
+    /* Shut down socket FIRST to unblock any pending kernel_recvmsg
+     * in the rx_thread before attempting to stop it. */
+    if (sess->sock) {
+        kernel_sock_shutdown(sess->sock, SHUT_RDWR);
+    }
+
     if (sess->rx_thread) {
         kthread_stop(sess->rx_thread);
         sess->rx_thread = NULL;
     }
 
     if (sess->sock) {
-        kernel_sock_shutdown(sess->sock, SHUT_RDWR);
         sock_release(sess->sock);
         sess->sock = NULL;
     }
@@ -204,6 +210,23 @@ static int pool_rx_thread_fn(void *data)
 
         if (sess->state == POOL_STATE_CLOSING)
             break;
+
+        /* Expire stale fragment reassembly buffers (5 second timeout) */
+        {
+            int fi;
+            for (fi = 0; fi < ARRAY_SIZE(sess->frags); fi++) {
+                struct pool_frag_buf *fb = &sess->frags[fi];
+                if (fb->data && !fb->complete &&
+                    time_after(jiffies,
+                               fb->start_jiffies + msecs_to_jiffies(5000))) {
+                    pr_warn("POOL: fragment timeout msg_id=%u slot=%d "
+                            "(received %u/%u bytes)\n",
+                            fb->msg_id, fi, fb->received, fb->total_len);
+                    kfree(fb->data);
+                    memset(fb, 0, sizeof(*fb));
+                }
+            }
+        }
     }
 
     kfree(payload);
@@ -225,7 +248,7 @@ int pool_session_connect(uint32_t ip, uint16_t port)
 
     sess = pool_session_alloc();
     if (!sess)
-        return -ENOMEM;
+        return -ENOSPC;
 
     sess_idx = sess - pool.sessions;
 
@@ -258,7 +281,8 @@ int pool_session_connect(uint32_t ip, uint16_t port)
         return ret;
     }
 
-    /* Receive CHALLENGE */
+    /* Receive CHALLENGE (with timeout to avoid blocking forever) */
+    pool_net_set_sock_rcvtimeo(sess->sock, 10);
     plen = sizeof(payload_buf);
     ret = pool_net_recv_packet(sess, &hdr, payload_buf, &plen);
     if (ret || (hdr.ver_type & 0x0F) != POOL_PKT_CHALLENGE) {
@@ -377,9 +401,12 @@ int pool_session_connect(uint32_t ip, uint16_t port)
         return ret;
     }
 
-    /* Wait for ACK or first DATA */
+    /* Wait for ACK or first DATA (with timeout) */
+    pool_net_set_sock_rcvtimeo(sess->sock, 30);
     plen = sizeof(payload_buf);
     ret = pool_net_recv_packet(sess, &hdr, payload_buf, &plen);
+    /* Clear timeout for normal session operation */
+    pool_net_set_sock_rcvtimeo(sess->sock, 0);
     if (ret) {
         pr_err("POOL: handshake completion failed: %d\n", ret);
         pool_session_free(sess);
@@ -417,7 +444,7 @@ int pool_session_accept(struct socket *client_sock)
 
     sess = pool_session_alloc();
     if (!sess)
-        return -ENOMEM;
+        return -ENOSPC;
 
     sess_idx = sess - pool.sessions;
     sess->sock = client_sock;
@@ -434,6 +461,7 @@ int pool_session_accept(struct socket *client_sock)
                             sess->crypto.local_pubkey);
 
     /* Receive INIT (stateless: we allocate no persistent state until verified) */
+    pool_net_set_sock_rcvtimeo(sess->sock, 10);
     plen = sizeof(payload_buf);
     ret = pool_net_recv_packet(sess, &hdr, payload_buf, &plen);
     if (ret || (hdr.ver_type & 0x0F) != POOL_PKT_INIT) {
@@ -502,9 +530,12 @@ int pool_session_accept(struct socket *client_sock)
     sess->connect_time = ktime_get_ns();
     sess->telemetry.mtu_current = POOL_DEFAULT_MTU;
 
-    /* Receive RESPONSE */
+    /* Receive RESPONSE (with timeout for puzzle-solving) */
+    pool_net_set_sock_rcvtimeo(sess->sock, 30);
     plen = sizeof(payload_buf);
     ret = pool_net_recv_packet(sess, &hdr, payload_buf, &plen);
+    /* Clear timeout for normal session operation */
+    pool_net_set_sock_rcvtimeo(sess->sock, 0);
     if (ret || (hdr.ver_type & 0x0F) != POOL_PKT_RESPONSE) {
         pr_warn("POOL: expected RESPONSE, got %d (ret=%d)\n",
                 hdr.ver_type & 0x0F, ret);

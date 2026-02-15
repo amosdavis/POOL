@@ -92,6 +92,7 @@ static void *tcp_to_pool_thread(void *arg)
     /* In practice this needs two threads or poll on both */
     bc->active = 0;
     close(bc->tcp_fd);
+    bc->tcp_fd = -1;
     return NULL;
 }
 
@@ -138,10 +139,14 @@ static void *bidir_thread(void *arg)
     }
 
     bc->active = 0;
-    close(bc->tcp_fd);
+    if (bc->tcp_fd >= 0) {
+        close(bc->tcp_fd);
+        bc->tcp_fd = -1;
+    }
     if (bc->session_idx >= 0) {
         uint32_t idx = bc->session_idx;
         ioctl(bc->pool_fd, POOL_IOC_CLOSE_SESS, &idx);
+        bc->session_idx = -1;
     }
     return NULL;
 }
@@ -154,6 +159,8 @@ static struct bridge_conn *alloc_bridge(void)
         if (!bridges[i].active) {
             memset(&bridges[i], 0, sizeof(bridges[i]));
             bridges[i].active = 1;
+            bridges[i].tcp_fd = -1;
+            bridges[i].session_idx = -1;
             pthread_mutex_unlock(&bridge_lock);
             return &bridges[i];
         }
@@ -199,7 +206,12 @@ static int run_tcp_to_pool(uint16_t tcp_port, uint32_t pool_dest,
         if (client_fd < 0) continue;
 
         bc = alloc_bridge();
-        if (!bc) { close(client_fd); continue; }
+        if (!bc) {
+            fprintf(stderr, "pool_bridge: connection limit reached (%d/%d)\n",
+                    MAX_BRIDGES, MAX_BRIDGES);
+            close(client_fd);
+            continue;
+        }
 
         bc->tcp_fd = client_fd;
         bc->pool_fd = open("/dev/pool", O_RDWR);
@@ -226,8 +238,20 @@ static int run_tcp_to_pool(uint16_t tcp_port, uint32_t pool_dest,
 
         printf("  bridge: TCP client → POOL session %d\n", ret);
         pthread_create(&bc->thread, NULL, bidir_thread, bc);
-        pthread_detach(bc->thread);
     }
+
+    /* Clean shutdown: join all active bridge threads */
+    running = 0;
+    pthread_mutex_lock(&bridge_lock);
+    for (int i = 0; i < MAX_BRIDGES; i++) {
+        if (bridges[i].active) {
+            pthread_t t = bridges[i].thread;
+            pthread_mutex_unlock(&bridge_lock);
+            pthread_join(t, NULL);
+            pthread_mutex_lock(&bridge_lock);
+        }
+    }
+    pthread_mutex_unlock(&bridge_lock);
 
     close(listen_fd);
     return 0;
@@ -265,8 +289,12 @@ static int run_pool_to_tcp(uint16_t pool_port, uint32_t tcp_dest,
             int found = 0, j;
             struct bridge_conn *bc;
 
-            /* Check if we already have a bridge for this session */
+            if (infos[i].state != POOL_STATE_ESTABLISHED) continue;
+
+            /* Hold lock across check + allocate to prevent TOCTOU race */
             pthread_mutex_lock(&bridge_lock);
+
+            /* Check if we already have a bridge for this session */
             for (j = 0; j < MAX_BRIDGES; j++) {
                 if (bridges[j].active &&
                     bridges[j].session_idx == (int)infos[i].index) {
@@ -274,13 +302,28 @@ static int run_pool_to_tcp(uint16_t pool_port, uint32_t tcp_dest,
                     break;
                 }
             }
-            pthread_mutex_unlock(&bridge_lock);
-            if (found) continue;
-            if (infos[i].state != POOL_STATE_ESTABLISHED) continue;
+            if (found) {
+                pthread_mutex_unlock(&bridge_lock);
+                continue;
+            }
 
-            /* New POOL session — bridge to TCP */
-            bc = alloc_bridge();
-            if (!bc) continue;
+            /* Allocate a bridge slot while still holding the lock */
+            bc = NULL;
+            for (j = 0; j < MAX_BRIDGES; j++) {
+                if (!bridges[j].active) {
+                    memset(&bridges[j], 0, sizeof(bridges[j]));
+                    bridges[j].active = 1;
+                    bc = &bridges[j];
+                    break;
+                }
+            }
+            pthread_mutex_unlock(&bridge_lock);
+
+            if (!bc) {
+                fprintf(stderr, "pool_bridge: connection limit reached (%d/%d)\n",
+                        MAX_BRIDGES, MAX_BRIDGES);
+                continue;
+            }
 
             bc->pool_fd = pool_fd_global;
             bc->session_idx = infos[i].index;
@@ -306,11 +349,22 @@ static int run_pool_to_tcp(uint16_t pool_port, uint32_t tcp_dest,
                    bc->session_idx,
                    inet_ntoa(dest_addr.sin_addr), tcp_port);
             pthread_create(&bc->thread, NULL, bidir_thread, bc);
-            pthread_detach(bc->thread);
         }
 
         usleep(100000); /* 100ms poll interval */
     }
+
+    /* Clean shutdown: join all active bridge threads */
+    pthread_mutex_lock(&bridge_lock);
+    for (int i = 0; i < MAX_BRIDGES; i++) {
+        if (bridges[i].active) {
+            pthread_t t = bridges[i].thread;
+            pthread_mutex_unlock(&bridge_lock);
+            pthread_join(t, NULL);
+            pthread_mutex_lock(&bridge_lock);
+        }
+    }
+    pthread_mutex_unlock(&bridge_lock);
 
     ioctl(pool_fd_global, POOL_IOC_STOP);
     close(pool_fd_global);

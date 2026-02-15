@@ -13,9 +13,13 @@
 #include <linux/slab.h>
 #include <linux/delay.h>
 #include <net/sock.h>
+#include <net/tcp.h>
 #include <linux/sockptr.h>
 
 #include "pool_internal.h"
+
+#define POOL_HANDSHAKE_TIMEOUT_SEC   10
+#define POOL_RESPONSE_TIMEOUT_SEC    30
 
 /* ---- Raw socket helpers ---- */
 
@@ -324,6 +328,8 @@ int pool_net_listen(uint16_t port)
     if (ret)
         pr_warn("POOL: SO_REUSEADDR failed: %d\n", ret);
 
+    pool_net_set_keepalive(pool.listen_sock);
+
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -338,7 +344,7 @@ int pool_net_listen(uint16_t port)
         return ret;
     }
 
-    ret = kernel_listen(pool.listen_sock, 8);
+    ret = kernel_listen(pool.listen_sock, POOL_LISTEN_BACKLOG);
     if (ret) {
         pr_err("POOL: listen failed: %d\n", ret);
         sock_release(pool.listen_sock);
@@ -392,6 +398,8 @@ int pool_net_connect(struct pool_session *sess, uint32_t ip, uint16_t port)
         return ret;
     }
 
+    pool_net_set_keepalive(sess->sock);
+
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(ip);
@@ -414,6 +422,37 @@ int pool_net_connect(struct pool_session *sess, uint32_t ip, uint16_t port)
 int pool_net_init(void)
 {
     return 0;
+}
+
+/* Set receive timeout on a socket */
+static void pool_net_set_rcvtimeo(struct socket *sock, int seconds)
+{
+    struct __kernel_sock_timeval tv;
+    sockptr_t optval;
+
+    tv.tv_sec = seconds;
+    tv.tv_usec = 0;
+    optval = KERNEL_SOCKPTR(&tv);
+    sock_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO_NEW,
+                    optval, sizeof(tv));
+}
+
+void pool_net_set_sock_rcvtimeo(struct socket *sock, int seconds)
+{
+    pool_net_set_rcvtimeo(sock, seconds);
+}
+
+/* Enable TCP keepalive: detect dead peers within ~90 seconds */
+static void pool_net_set_keepalive(struct socket *sock)
+{
+    int opt = 1;
+    sockptr_t optval = KERNEL_SOCKPTR(&opt);
+    int idle = 60, intvl = 10, cnt = 3;
+
+    sock_setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, optval, sizeof(opt));
+    tcp_sock_set_keepidle(sock->sk, idle);
+    tcp_sock_set_keepintvl(sock->sk, intvl);
+    tcp_sock_set_keepcnt(sock->sk, cnt);
 }
 
 void pool_net_cleanup(void)
