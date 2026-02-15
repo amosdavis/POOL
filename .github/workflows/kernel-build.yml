@@ -51,7 +51,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: pool-build-$(uname -r)
+          name: pool-build
           path: |
             linux/pool.ko
             linux/poolctl

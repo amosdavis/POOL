@@ -43,7 +43,7 @@ jobs:
 
       - name: Create .pkg installer
         run: |
-          VERSION=$(grep PACKAGE_VERSION linux/packaging/dkms.conf | cut -d'"' -f2)
+          VERSION=$(grep '^PACKAGE_VERSION=' linux/packaging/dkms.conf | cut -d'"' -f2)
 
           # Stage install layout
           STAGE=$(mktemp -d)

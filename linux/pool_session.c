@@ -13,6 +13,7 @@
 #include <linux/delay.h>
 #include <linux/random.h>
 #include <linux/in.h>
+#include <linux/in6.h>
 #include <crypto/algapi.h>
 
 #include "pool_internal.h"
