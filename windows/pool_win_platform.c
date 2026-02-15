@@ -252,28 +252,16 @@ int pool_crypto_aead_encrypt(const uint8_t key[POOL_KEY_SIZE],
     ULONG ct_len;
     int ret = -1;
 
+    /*
+     * W01: POOL v1 mandates ChaCha20-Poly1305 as the sole AEAD cipher.
+     * No fallback to AES-GCM — a silent cipher switch would produce
+     * packets incompatible with Linux/macOS peers (no cipher negotiation).
+     * Minimum requirement: Windows 10 version 1903.
+     */
     status = BCryptOpenAlgorithmProvider(&alg, BCRYPT_CHACHA20_POLY1305_ALGORITHM,
                                          NULL, 0);
-    if (!BCRYPT_SUCCESS(status)) {
-        /*
-         * W01: ChaCha20-Poly1305 unavailable (pre-Windows 10 1903).
-         * Fall back to AES-256-GCM which is universally available.
-         * Both provide authenticated encryption with 128-bit tags.
-         */
-        status = BCryptOpenAlgorithmProvider(&alg, BCRYPT_AES_ALGORITHM,
-                                             NULL, 0);
-        if (!BCRYPT_SUCCESS(status))
-            return -1;
-        status = BCryptSetProperty(alg, BCRYPT_CHAINING_MODE,
-                                   (PUCHAR)BCRYPT_CHAIN_MODE_GCM,
-                                   sizeof(BCRYPT_CHAIN_MODE_GCM), 0);
-        if (!BCRYPT_SUCCESS(status))
-            goto out;
-    } else {
-        BCryptSetProperty(alg, BCRYPT_CHAINING_MODE,
-                          (PUCHAR)BCRYPT_CHAIN_MODE_NA,
-                          sizeof(BCRYPT_CHAIN_MODE_NA), 0);
-    }
+    if (!BCRYPT_SUCCESS(status))
+        return -1;
 
     status = BCryptGenerateSymmetricKey(alg, &bkey, NULL, 0,
                                          (PUCHAR)key, POOL_KEY_SIZE, 0);
@@ -315,20 +303,11 @@ int pool_crypto_aead_decrypt(const uint8_t key[POOL_KEY_SIZE],
     ULONG pt_len;
     int ret = -1;
 
+    /* W01: No fallback — ChaCha20-Poly1305 is mandatory (see encrypt) */
     status = BCryptOpenAlgorithmProvider(&alg, BCRYPT_CHACHA20_POLY1305_ALGORITHM,
                                          NULL, 0);
-    if (!BCRYPT_SUCCESS(status)) {
-        /* W01: Fall back to AES-256-GCM on pre-1903 Windows */
-        status = BCryptOpenAlgorithmProvider(&alg, BCRYPT_AES_ALGORITHM,
-                                             NULL, 0);
-        if (!BCRYPT_SUCCESS(status))
-            return -1;
-        status = BCryptSetProperty(alg, BCRYPT_CHAINING_MODE,
-                                   (PUCHAR)BCRYPT_CHAIN_MODE_GCM,
-                                   sizeof(BCRYPT_CHAIN_MODE_GCM), 0);
-        if (!BCRYPT_SUCCESS(status))
-            goto out;
-    }
+    if (!BCRYPT_SUCCESS(status))
+        return -1;
 
     status = BCryptGenerateSymmetricKey(alg, &bkey, NULL, 0,
                                          (PUCHAR)key, POOL_KEY_SIZE, 0);

@@ -195,11 +195,11 @@ Feature: POOL Failure Mode Mitigations
   # ---- Category 5: Platform (W01-W04, D01-D03) ----
 
   @platform @windows
-  Scenario: W01 - Windows ChaCha20 falls back to AES-256-GCM
+  Scenario: W01 - Windows fails hard when ChaCha20-Poly1305 unavailable
     Given a POOL Windows node on pre-1903 Windows
     When BCrypt ChaCha20-Poly1305 is unavailable
-    Then the implementation should fall back to AES-256-GCM
-    And authenticated encryption should still function correctly
+    Then the implementation should fail with an error
+    And no fallback cipher should be used
 
   @platform @windows
   Scenario: W02 - Windows uses real X25519 ECDH

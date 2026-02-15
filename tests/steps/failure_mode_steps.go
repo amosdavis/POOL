@@ -540,14 +540,17 @@ func (f *failureModeCtx) bcryptChaCha20Unavailable() error {
 	return nil
 }
 
-func (f *failureModeCtx) shouldFallBackToAES256GCM() error {
-	return f.assertContains(f.sourceCode, "BCRYPT_AES_ALGORITHM",
-		"W01: should fall back to AES")
+func (f *failureModeCtx) shouldFailWithAnError() error {
+	/* Verify encrypt returns -1 when ChaCha20 unavailable (no fallback) */
+	return f.assertContains(f.sourceCode, "return -1",
+		"W01: should return error when ChaCha20 unavailable")
 }
 
-func (f *failureModeCtx) authenticatedEncryptionFunctions() error {
-	return f.assertContains(f.sourceCode, "BCRYPT_CHAIN_MODE_GCM",
-		"W01: should use GCM mode")
+func (f *failureModeCtx) noFallbackCipherUsed() error {
+	if strings.Contains(f.sourceCode, "BCRYPT_AES_ALGORITHM") {
+		return fmt.Errorf("W01: source must not contain AES fallback cipher")
+	}
+	return nil
 }
 
 func (f *failureModeCtx) aPoolWindowsNode() error {
@@ -1045,8 +1048,8 @@ func InitializeFailureModeScenario(ctx *godog.ScenarioContext) {
 	// Platform (W01-W04, D01-D03)
 	ctx.Step(`^a POOL Windows node on pre-1903 Windows$`, f.aPoolWindowsNodePreW1903)
 	ctx.Step(`^BCrypt ChaCha20-Poly1305 is unavailable$`, f.bcryptChaCha20Unavailable)
-	ctx.Step(`^the implementation should fall back to AES-256-GCM$`, f.shouldFallBackToAES256GCM)
-	ctx.Step(`^authenticated encryption should still function correctly$`, f.authenticatedEncryptionFunctions)
+	ctx.Step(`^the implementation should fail with an error$`, f.shouldFailWithAnError)
+	ctx.Step(`^no fallback cipher should be used$`, f.noFallbackCipherUsed)
 	ctx.Step(`^a POOL Windows node$`, f.aPoolWindowsNode)
 	ctx.Step(`^X25519 shared secret is computed$`, f.x25519SharedSecretComputed)
 	ctx.Step(`^BCrypt ECDH with Curve25519 should be used$`, f.bcryptECDHWithCurve25519Used)
