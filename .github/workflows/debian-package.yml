@@ -26,6 +26,7 @@ on:
       - 'vault/**'
       - 'tools/**'
       - 'debian/**'
+  workflow_dispatch:
 
 permissions:
   contents: write
