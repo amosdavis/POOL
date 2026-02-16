@@ -87,18 +87,22 @@ func (f *failureModeCtx) aPoolCryptoContextWithNoHardwareECDH() error {
 	return f.loadSource("pool_crypto.c")
 }
 
-func (f *failureModeCtx) theEcdhFallbackPathIsUsed() error {
+func (f *failureModeCtx) theEcdhFunctionIsCalled() error {
 	return nil
 }
 
-func (f *failureModeCtx) aWarningShouldBeLoggedExactlyOnce() error {
-	return f.assertContains(f.sourceCode, "pr_warn_once",
-		"C02: ECDH fallback should log warning once")
+func (f *failureModeCtx) itShouldReturnAnErrorRefusingToProceed() error {
+	return f.assertContains(f.sourceCode, "return -ENOENT",
+		"C02: ECDH must fail hard when curve25519 unavailable")
 }
 
-func (f *failureModeCtx) theEphemeralPublicKeyShouldBeZeroizedAfterUse() error {
-	return f.assertContains(f.sourceCode, "memzero_explicit(my_pubkey",
-		"C02: pubkey should be zeroized")
+func (f *failureModeCtx) noFallbackCipherShouldBeUsed() error {
+	if strings.Contains(f.sourceCode, "SHA256 fallback") ||
+		strings.Contains(f.sourceCode, "REDUCED SECURITY") ||
+		strings.Contains(f.sourceCode, "SHA256(sorted") {
+		return fmt.Errorf("C02: code still contains SHA256 fallback logic")
+	}
+	return nil
 }
 
 func (f *failureModeCtx) aPoolHKDFContext() error {
@@ -943,9 +947,9 @@ func InitializeFailureModeScenario(ctx *godog.ScenarioContext) {
 	ctx.Step(`^bytes 0-3 of the nonce should contain hmac_key bytes not zeros$`, f.bytes03OfNonceShouldContainHmacKeyNotZeros)
 	ctx.Step(`^bytes 4-11 should contain the big-endian sequence number$`, f.bytes411ShouldContainBigEndianSequence)
 	ctx.Step(`^a POOL crypto context with no hardware ECDH$`, f.aPoolCryptoContextWithNoHardwareECDH)
-	ctx.Step(`^the ECDH fallback path is used$`, f.theEcdhFallbackPathIsUsed)
-	ctx.Step(`^a warning should be logged exactly once$`, f.aWarningShouldBeLoggedExactlyOnce)
-	ctx.Step(`^the ephemeral public key should be zeroized after use$`, f.theEphemeralPublicKeyShouldBeZeroizedAfterUse)
+	ctx.Step(`^the ECDH function is called$`, f.theEcdhFunctionIsCalled)
+	ctx.Step(`^it should return an error refusing to proceed$`, f.itShouldReturnAnErrorRefusingToProceed)
+	ctx.Step(`^no fallback cipher should be used$`, f.noFallbackCipherShouldBeUsed)
 	ctx.Step(`^a POOL HKDF context$`, f.aPoolHKDFContext)
 	ctx.Step(`^HKDF is called with okm_len 0$`, f.hkdfIsCalledWithOkmLen0)
 	ctx.Step(`^it should return EINVAL$`, f.itShouldReturnEINVAL)

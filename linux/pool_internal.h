@@ -311,6 +311,6 @@ int pool_pqc_hybrid_combine(const uint8_t *x25519_ss,
                             uint8_t *combined_ss);
 int pool_pqc_enabled(void);
 int pool_pqc_get_version(void);
-int pool_pqc_negotiate(int peer_version);
+int pool_pqc_check_version(int peer_version);
 
 #endif /* _POOL_INTERNAL_H */

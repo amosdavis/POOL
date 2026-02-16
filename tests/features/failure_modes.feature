@@ -13,11 +13,11 @@ Feature: POOL Failure Mode Mitigations
     And bytes 4-11 should contain the big-endian sequence number
 
   @crypto
-  Scenario: C02 - ECDH fallback logs warning and zeroizes pubkey
+  Scenario: C02 - ECDH without curve25519 KPP fails hard
     Given a POOL crypto context with no hardware ECDH
-    When the ECDH fallback path is used
-    Then a warning should be logged exactly once
-    And the ephemeral public key should be zeroized after use
+    When the ECDH function is called
+    Then it should return an error refusing to proceed
+    And no fallback cipher should be used
 
   @crypto
   Scenario: C03 - HKDF rejects invalid output lengths

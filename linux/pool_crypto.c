@@ -213,18 +213,14 @@ int pool_crypto_gen_keypair(uint8_t *privkey, uint8_t *pubkey)
 
     kpp = crypto_alloc_kpp("curve25519", 0, 0);
     if (IS_ERR(kpp)) {
-        /* Fallback: derive pubkey from privkey via SHA256 */
-        struct crypto_shash *sha;
-        SHASH_DESC_ON_STACK(desc, NULL);
-        sha = crypto_alloc_shash("sha256", 0, 0);
-        if (IS_ERR(sha))
-            return PTR_ERR(sha);
-        desc->tfm = sha;
-        crypto_shash_init(desc);
-        crypto_shash_update(desc, privkey, POOL_KEY_SIZE);
-        crypto_shash_final(desc, pubkey);
-        crypto_free_shash(sha);
-        return 0;
+        /*
+         * C02: POOL mandates X25519 for key exchange — no fallback.
+         * A SHA256-based substitute would not provide CDH security:
+         * any observer of both public keys could compute the shared
+         * secret.  Fail hard instead of silently downgrading.
+         */
+        pr_err("POOL: curve25519 KPP unavailable — cannot generate keypair (no fallback)\n");
+        return -ENOENT;
     }
 
     ret = crypto_kpp_set_secret(kpp, privkey, POOL_KEY_SIZE);
@@ -263,7 +259,7 @@ int pool_crypto_gen_keypair(uint8_t *privkey, uint8_t *pubkey)
 
 /*
  * X25519 ECDH shared secret.
- * Uses KPP API, with SHA256-based fallback if KPP fails.
+ * Uses KPP API.  POOL mandates X25519 — no fallback cipher.
  * Both sides MUST produce the same shared_secret from the same
  * (privkey, peer_pubkey) pair.
  */
@@ -280,44 +276,13 @@ int pool_crypto_ecdh(const uint8_t *privkey, const uint8_t *peer_pubkey,
     kpp = crypto_alloc_kpp("curve25519", 0, 0);
     if (IS_ERR(kpp)) {
         /*
-         * C02: Fallback when kernel lacks curve25519 KPP.
-         * shared = SHA256(sorted(pubA, pubB))
-         *
-         * This IS commutative — both sides compute the same value.
-         * However, it does NOT provide X25519's CDH security property.
-         * An eavesdropper who knows both public keys can compute the
-         * shared secret. This fallback only protects against passive
-         * attackers who don't see the handshake. Log a warning.
+         * C02: POOL mandates X25519 for key exchange — no fallback.
+         * A SHA256-based substitute would not provide CDH security:
+         * any observer of both public keys could compute the shared
+         * secret.  Fail hard instead of silently downgrading.
          */
-        struct crypto_shash *sha;
-        SHASH_DESC_ON_STACK(desc, NULL);
-        uint8_t my_pubkey[POOL_KEY_SIZE];
-
-        pr_warn_once("POOL: curve25519 KPP unavailable, using SHA256 fallback (REDUCED SECURITY)\n");
-
-        sha = crypto_alloc_shash("sha256", 0, 0);
-        if (IS_ERR(sha))
-            return PTR_ERR(sha);
-
-        /* Compute our pubkey from privkey (matches keygen fallback) */
-        desc->tfm = sha;
-        crypto_shash_init(desc);
-        crypto_shash_update(desc, privkey, POOL_KEY_SIZE);
-        crypto_shash_final(desc, my_pubkey);
-
-        /* shared = SHA256(sorted_pubkeys) — commutative */
-        crypto_shash_init(desc);
-        if (memcmp(my_pubkey, peer_pubkey, POOL_KEY_SIZE) < 0) {
-            crypto_shash_update(desc, my_pubkey, POOL_KEY_SIZE);
-            crypto_shash_update(desc, peer_pubkey, POOL_KEY_SIZE);
-        } else {
-            crypto_shash_update(desc, peer_pubkey, POOL_KEY_SIZE);
-            crypto_shash_update(desc, my_pubkey, POOL_KEY_SIZE);
-        }
-        crypto_shash_final(desc, shared_secret);
-        memzero_explicit(my_pubkey, sizeof(my_pubkey));
-        crypto_free_shash(sha);
-        return 0;
+        pr_err("POOL: curve25519 KPP unavailable — cannot compute ECDH (no fallback)\n");
+        return -ENOENT;
     }
 
     ret = crypto_kpp_set_secret(kpp, privkey, POOL_KEY_SIZE);

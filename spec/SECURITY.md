@@ -380,39 +380,52 @@ designed to prevent.
 
 ## 8. Cipher Agility Roadmap (P12)
 
-POOL v1 uses a fixed cipher suite (ChaCha20-Poly1305 + X25519 + HMAC-SHA256).
-If any primitive is broken, the entire protocol must be replaced. This section
-defines the cipher agility roadmap for v2+.
+POOL v1 uses a fixed cipher suite (ChaCha20-Poly1305 + X25519 + HMAC-SHA256)
+with **no algorithm negotiation** (see §6.1).  If any primitive is broken, the
+entire protocol version must be replaced — not patched with a fallback cipher.
 
-### 8.1 Cipher Suite Identifiers
+This section records *possible future directions* for v2+.  Nothing here
+applies to v1 nodes; v1 MUST NOT implement cipher negotiation, cipher suite
+fields, or runtime algorithm selection.
 
-Future POOL versions MUST support negotiating cipher suites via a new
-CIPHER_SUITE field in the INIT packet. Proposed identifiers:
+### 8.1 Cipher Suite Identifiers (v2+ only — not implemented in v1)
 
-| ID | AEAD | Key Exchange | MAC | Status |
-|----|------|-------------|-----|--------|
-| 0x01 | ChaCha20-Poly1305 | X25519 | HMAC-SHA256 | v1 (current) |
+Each future protocol version would still ship a **single fixed cipher suite**.
+The identifiers below are for documentation and bridge interoperability, not
+for runtime negotiation between endpoints.
+
+| ID | AEAD | Key Exchange | MAC | Protocol Version |
+|----|------|-------------|-----|------------------|
+| 0x01 | ChaCha20-Poly1305 | X25519 | HMAC-SHA256 | v1 (current, fixed) |
 | 0x02 | ChaCha20-Poly1305 | X25519 + ML-KEM-768 | HMAC-SHA256 | v2 (hybrid PQ) |
-| 0x03 | AES-256-GCM | X25519 + ML-KEM-768 | HMAC-SHA256 | v2 (alt AEAD) |
-| 0x04 | AES-256-GCM | X25519 | HMAC-SHA256 | v2 (AES fallback) |
 
-### 8.2 Negotiation Rules
+Additional identifiers (e.g., AES-256-GCM variants) would only be assigned
+when a concrete protocol version requires them.
 
-1. The client MUST include a list of supported cipher suite IDs in INIT
-2. The server MUST select the highest-ID mutually supported suite
-3. If no mutual suite exists, the server MUST reject with CLOSE (NO_CIPHER)
-4. After v2 handshake, downgrade to v1-only MUST be rejected (§13.9)
+### 8.2 Version Compatibility (replaces "Negotiation Rules")
 
-### 8.3 Emergency Cipher Rotation
+POOL nodes do **not** negotiate cipher suites.  Each node advertises its
+protocol version in the INIT packet header (4-bit version field, §2 of
+`spec/PROTOCOL.md`).  Compatibility rules:
 
-If a critical break is discovered in ChaCha20-Poly1305:
+1. A node MUST refuse a handshake from a peer whose protocol version differs
+   from its own.
+2. Cross-version communication is handled by `pool_bridge` (§6.2), which
+   terminates one version on each side and re-encrypts between them.
+3. There is no "downgrade" or "upgrade" at the endpoint level.
 
-1. Deploy module update adding AES-256-GCM support (suite 0x03 or 0x04)
-2. Set `min_cipher_suite = 0x03` in config to disable broken suite
-3. Existing sessions complete normally; new sessions use safe suite
-4. After full fleet update, remove broken suite from supported list
+### 8.3 Emergency Response to a Primitive Break
 
-This ensures POOL can survive a primitive break without protocol shutdown.
+If a critical break is discovered in a v1 primitive (e.g., ChaCha20-Poly1305):
+
+1. Issue a new protocol version (v2) that uses the replacement primitive.
+2. Deploy `pool_bridge` instances to mediate v1 ↔ v2 traffic during the
+   transition (§6.2).
+3. Migrate all nodes to v2.
+4. Deprecate and remove v1 per the timeline in §6.3.
+
+This approach preserves the fixed-cipher-suite design while allowing the
+network to survive a primitive break.
   HMAC-BLAKE2b (if performance is a concern). The HKDF derivation function
   would also need to be updated from HKDF-SHA256 to HKDF with the
   replacement hash.

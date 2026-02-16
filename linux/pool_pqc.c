@@ -709,10 +709,23 @@ int pool_pqc_get_version(void)
     return pool_pqc_version;
 }
 
-/* Negotiate crypto version with peer */
-int pool_pqc_negotiate(int peer_version)
+/*
+ * Verify crypto version compatibility with peer.
+ *
+ * POOL design tenet: each protocol version has a fixed cipher suite
+ * with no negotiation.  A v2 node MUST NOT silently downgrade to v1.
+ * If versions are incompatible the handshake must be refused so that
+ * a pool_bridge can mediate the transition (§6.2 of SECURITY.md).
+ *
+ * Returns: the agreed version (>0) on success, -EPROTONOSUPPORT on
+ *          version mismatch.
+ */
+int pool_pqc_check_version(int peer_version)
 {
-    if (peer_version >= POOL_CRYPTO_V2 && pool_pqc_version >= POOL_CRYPTO_V2)
-        return POOL_CRYPTO_V2;
-    return POOL_CRYPTO_V1;
+    if (peer_version == pool_pqc_version)
+        return pool_pqc_version;
+
+    pr_warn("POOL: version mismatch (local=%d, peer=%d) — refusing handshake\n",
+            pool_pqc_version, peer_version);
+    return -EPROTONOSUPPORT;
 }

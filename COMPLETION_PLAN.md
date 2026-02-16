@@ -241,6 +241,24 @@ All 52 identified failure modes have been addressed across 8 implementation phas
 - Windows platform now fails hard if ChaCha20-Poly1305 is unavailable via BCrypt
 - Updated W01 BDD scenario to verify fail-hard behavior instead of fallback
 
+### 7.2 X25519 SHA-256 Fallback Removal — ✅ DONE
+- Removed insecure SHA-256-based ECDH fallback from `linux/pool_crypto.c` (both keygen and shared secret)
+- The SHA-256 fallback had no CDH security — any eavesdropper who saw both public keys could compute the shared secret
+- Both `pool_crypto_gen_keypair()` and `pool_crypto_ecdh()` now fail hard with `-ENOENT` if curve25519 KPP is unavailable
+- Updated C02 BDD scenario to verify fail-hard behavior instead of fallback
+
+### 7.3 PQC Version Negotiation Removal — ✅ DONE
+- Replaced `pool_pqc_negotiate()` with `pool_pqc_check_version()` in `linux/pool_pqc.c`
+- Old function silently downgraded v2→v1 when peer was v1, violating fixed-cipher-suite tenet
+- New function refuses handshake with `-EPROTONOSUPPORT` if versions differ
+- Cross-version traffic handled by `pool_bridge` per §6.2 of SECURITY.md
+
+### 7.4 SECURITY.md §8 Cipher Agility Rewrite — ✅ DONE
+- Rewrote §8 to eliminate cipher negotiation language that contradicted §6.1
+- Removed AES-256-GCM cipher suite IDs (0x03, 0x04) that implied runtime cipher selection
+- Replaced "Negotiation Rules" (§8.2) with "Version Compatibility" — nodes refuse mismatched versions
+- Replaced "Emergency Cipher Rotation" (§8.3) with version-based migration per §6.2
+
 ## Phase 8: CI/CD Pipeline & Packaging
 
 ### 8.1 GitHub Actions Workflows — ✅ DONE
