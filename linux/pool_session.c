@@ -51,6 +51,13 @@ void pool_session_cleanup(void)
 struct pool_session *pool_session_alloc(void)
 {
     int i;
+
+    /* T8: Refuse new sessions when integrity is compromised (RT-*) */
+    if (pool.integrity_compromised) {
+        pr_crit("POOL: refusing new session — integrity compromised\n");
+        return NULL;
+    }
+
     mutex_lock(&pool.sessions_lock);
     for (i = 0; i < POOL_MAX_SESSIONS; i++) {
         if (!pool.sessions[i].active) {
@@ -268,6 +275,53 @@ static int pool_rx_thread_fn(void *data)
         case POOL_PKT_ROLLBACK:
             pool_config_handle_rollback(sess, payload, plen);
             break;
+
+        case POOL_PKT_INTEGRITY: {
+            /*
+             * T2/T4: Peer crypto challenge-response (RT-C02, RT-C04).
+             * If we receive a 16-byte challenge, encrypt it with session
+             * key and return it. If we receive a 32-byte response (16
+             * nonce + 16 tag), verify against our pending challenge.
+             */
+            if (plen == 16) {
+                /* Incoming challenge: encrypt nonce and return */
+                uint8_t response[16 + POOL_TAG_SIZE];
+                int resp_len = 0;
+                int rc;
+
+                mutex_lock(&sess->crypto_lock);
+                rc = pool_crypto_encrypt(&sess->crypto,
+                                          payload, 16,
+                                          response, &resp_len,
+                                          sess->crypto.local_seq);
+                mutex_unlock(&sess->crypto_lock);
+                if (!rc) {
+                    pool_net_send_packet(sess, POOL_PKT_INTEGRITY,
+                                         POOL_FLAG_REQUIRE_ACK, 0,
+                                         response, resp_len);
+                }
+            } else if (plen > 16 && sess->integrity_challenge_pending) {
+                /* Incoming response: decrypt and verify */
+                uint8_t decrypted[16];
+                int dec_len = 0;
+                int rc;
+
+                mutex_lock(&sess->crypto_lock);
+                rc = pool_crypto_decrypt(&sess->crypto,
+                                          payload, plen,
+                                          decrypted, &dec_len,
+                                          sess->crypto.remote_seq);
+                mutex_unlock(&sess->crypto_lock);
+                sess->integrity_challenge_pending = 0;
+                if (rc || dec_len != 16 ||
+                    crypto_memneq(decrypted, sess->integrity_challenge, 16)) {
+                    pr_crit("POOL: peer integrity challenge failed — "
+                            "crypto behavior mismatch\n");
+                    pool.integrity_compromised = 1;
+                }
+            }
+            break;
+        }
 
         default:
             pr_debug("POOL: unhandled packet type %d\n", pkt_type);

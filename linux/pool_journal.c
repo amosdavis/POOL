@@ -55,11 +55,14 @@ void pool_journal_add(uint16_t change_type, uint32_t ver_before,
     e->change_type = change_type;
     e->detail_length = (detail_len > 0) ? detail_len : 0;
 
-    /* Compute change hash */
+    /* Compute change hash (T5: Merkle chain — includes previous entry hash) */
     sha = crypto_alloc_shash("sha256", 0, 0);
     if (!IS_ERR(sha)) {
         desc->tfm = sha;
         crypto_shash_init(desc);
+        if (pool.journal_count > 0)
+            crypto_shash_update(desc,
+                pool.journal[pool.journal_count - 1].change_hash, 32);
         crypto_shash_update(desc, (uint8_t *)&e->timestamp, 8);
         crypto_shash_update(desc, (uint8_t *)&change_type, 2);
         if (detail && detail_len > 0)

@@ -32,7 +32,8 @@ static inline int pool_state_valid_pkt(uint8_t state, uint8_t pkt_type)
                pkt_type == POOL_PKT_CONFIG    ||
                pkt_type == POOL_PKT_ROLLBACK  ||
                pkt_type == POOL_PKT_DISCOVER  ||
-               pkt_type == POOL_PKT_JOURNAL;
+               pkt_type == POOL_PKT_JOURNAL   ||
+               pkt_type == POOL_PKT_INTEGRITY;
     case POOL_STATE_REKEYING:
         return pkt_type == POOL_PKT_REKEY ||
                pkt_type == POOL_PKT_ACK  ||

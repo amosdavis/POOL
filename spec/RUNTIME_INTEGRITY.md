@@ -671,3 +671,45 @@ this document extend that principle to all aspects of POOL's operation.
 - `linux/pool_main.c` — Module init/exit, self-test invocation
 - `common/pool_state.h` — State machine definition and transition logic
 - `tests/features/failure_modes.feature` — Existing 52 failure mode BDD tests
+
+---
+
+## 9. Implementation Status
+
+The following mitigations have been implemented in the POOL kernel module
+codebase. Each maps to one or more tenets (T1–T8) and failure modes (RT-*).
+
+### 9.1 P0 — Low Effort, High Impact (Complete)
+
+| Mitigation | Tenet | Failure Mode | File(s) |
+|-----------|-------|-------------|---------|
+| Journal hash chaining (Merkle chain) | T5 | RT-A02 | `pool_journal.c` |
+| Periodic crypto self-test re-execution (every ~60s) | T1 | RT-C01, RT-A03 | `pool_crypto.c`, `pool_telemetry.c` |
+| Compiler security flags (`-fstack-protector-strong`, `-Wformat-security`) | T6 | RT-S05, RT-C01 | `Makefile`, `Kbuild` |
+| Crypto behavioral spot-check (known-answer test) | T2 | RT-C02, RT-C04, RT-C05 | `pool_crypto.c` |
+
+### 9.2 P1 — Medium Effort, High Impact (Complete)
+
+| Mitigation | Tenet | Failure Mode | File(s) |
+|-----------|-------|-------------|---------|
+| Module `.text` section CRC32 checksumming | T1, T6 | RT-C01 | `pool_main.c`, `pool_telemetry.c` |
+| Shadow sequence counter with divergence detection | T2 | RT-S02 | `pool_internal.h`, `pool_net.c` |
+| Integrity alert mechanism (`/proc/pool/integrity`, session refusal) | T8 | All | `pool_sysinfo.c`, `pool_session.c` |
+| Heartbeat state digest exchange (CRC32 of session state) | T4 | RT-S01, RT-S03 | `pool_telemetry.c`, `pool_proto.h` |
+
+### 9.3 P2 — Medium Effort, Medium Impact (Complete)
+
+| Mitigation | Tenet | Failure Mode | File(s) |
+|-----------|-------|-------------|---------|
+| Peer crypto challenge-response (`POOL_PKT_INTEGRITY 0xC`) | T2, T4 | RT-C02, RT-C04 | `pool.h`, `pool_state.h`, `pool_session.c`, `pool_telemetry.c` |
+| Attestation procfs interface (`/proc/pool/attestation`) | T3 | RT-C01, RT-A03 | `pool_sysinfo.c`, `pool_internal.h` |
+
+### 9.4 Out of Scope
+
+- **TPM/SGX hardware attestation (T3):** Requires platform-specific TPM or SGX
+  support. Attestation hooks are provided via `/proc/pool/attestation`.
+- **External audit log replication (T7):** Requires external infrastructure
+  (syslog server, append-only storage). Journal hash chaining ensures local
+  integrity; external replication is a deployment concern.
+- **Hardware overlay detection:** Cannot be fully solved in software. Module
+  `.text` CRC32 and crypto spot-checks provide partial detection.

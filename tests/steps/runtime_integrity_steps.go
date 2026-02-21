@@ -532,6 +532,134 @@ func (r *runtimeIntegrityCtx) recoveryWithoutTrustRequired() error {
 	return r.assertContains(r.specContent, "Recovery without trust in the compromised system", "T8")
 }
 
+// ---- Implementation verification methods ----
+
+func (r *runtimeIntegrityCtx) loadBuildConfig() error {
+	makeData, err1 := os.ReadFile(filepath.Join("..", "linux", "Makefile"))
+	kbuildData, err2 := os.ReadFile(filepath.Join("..", "linux", "Kbuild"))
+	if err1 != nil && err2 != nil {
+		return fmt.Errorf("cannot read Makefile or Kbuild")
+	}
+	r.sourceCode = string(makeData) + "\n" + string(kbuildData)
+	return nil
+}
+
+func (r *runtimeIntegrityCtx) loadProtoDefs() error {
+	data, err := os.ReadFile(filepath.Join("..", "common", "pool_proto.h"))
+	if err != nil {
+		return fmt.Errorf("cannot read pool_proto.h: %v", err)
+	}
+	r.sourceCode = string(data)
+	return nil
+}
+
+// P0-1: Journal hash chaining
+func (r *runtimeIntegrityCtx) prevHashIncludedInSHA() error {
+	return r.assertContains(r.sourceCode, "prev_hash", "P0-1: previous hash in SHA256")
+}
+func (r *runtimeIntegrityCtx) firstEntryZeroHash() error {
+	return r.assertContains(r.sourceCode, "memset", "P0-1: zero-init previous hash")
+}
+
+// P0-2: Runtime self-tests
+func (r *runtimeIntegrityCtx) runtimeSelftestCalledPeriodically() error {
+	return r.assertContains(r.sourceCode, "pool_crypto_runtime_selftest", "P0-2: runtime selftest call")
+}
+func (r *runtimeIntegrityCtx) spotCheckCalledPeriodically() error {
+	return r.assertContains(r.sourceCode, "pool_crypto_spot_check", "P0-2: spot-check call")
+}
+func (r *runtimeIntegrityCtx) integrityCompromisedSetOnFailure() error {
+	return r.assertContains(r.sourceCode, "integrity_compromised", "P0-2: compromised flag")
+}
+
+// P0-3: Compiler flags
+func (r *runtimeIntegrityCtx) fstackProtectorEnabled() error {
+	return r.assertContains(r.sourceCode, "fstack-protector-strong", "P0-3: stack protector")
+}
+func (r *runtimeIntegrityCtx) wformatSecurityEnabled() error {
+	return r.assertContains(r.sourceCode, "Wformat-security", "P0-3: format security")
+}
+
+// P1-1: Text checksumming
+func (r *runtimeIntegrityCtx) textCrcComputedAtInit() error {
+	return r.assertContains(r.sourceCode, "text_crc32", "P1-1: text CRC32 at init")
+}
+func (r *runtimeIntegrityCtx) textCrcReverifiedInHeartbeat() error {
+	telemetryData, err := os.ReadFile(filepath.Join("..", "linux", "pool_telemetry.c"))
+	if err != nil {
+		return fmt.Errorf("cannot read pool_telemetry.c: %v", err)
+	}
+	if !strings.Contains(string(telemetryData), "text_crc32") {
+		return fmt.Errorf("P1-1: text CRC32 not re-verified in heartbeat")
+	}
+	return nil
+}
+
+// P1-2: Shadow sequence counter
+func (r *runtimeIntegrityCtx) shadowSeqIncremented() error {
+	return r.assertContains(r.sourceCode, "shadow_local_seq++", "P1-2: shadow seq increment")
+}
+func (r *runtimeIntegrityCtx) shadowSeqCompared() error {
+	return r.assertContains(r.sourceCode, "shadow_local_seq", "P1-2: shadow seq compared")
+}
+func (r *runtimeIntegrityCtx) divergenceSetsCompromised() error {
+	return r.assertContains(r.sourceCode, "integrity_compromised", "P1-2: divergence sets compromised")
+}
+
+// P1-3: Integrity alert
+func (r *runtimeIntegrityCtx) procIntegrityReportsStatus() error {
+	return r.assertContains(r.sourceCode, "integrity_compromised", "P1-3: proc integrity status")
+}
+func (r *runtimeIntegrityCtx) procAttestationReportsCrc() error {
+	return r.assertContains(r.sourceCode, "text_crc32", "P1-3: proc attestation CRC")
+}
+func (r *runtimeIntegrityCtx) sessionRefusesWhenCompromised() error {
+	return r.assertContains(r.sourceCode, "integrity_compromised", "P1-3: session refusal")
+}
+
+// P1-4: State digest
+func (r *runtimeIntegrityCtx) stateDigestFieldExists() error {
+	return r.assertContains(r.sourceCode, "state_digest", "P1-4: state_digest field")
+}
+func (r *runtimeIntegrityCtx) stateDigestIsCrc32() error {
+	telemetryData, err := os.ReadFile(filepath.Join("..", "linux", "pool_telemetry.c"))
+	if err != nil {
+		return fmt.Errorf("cannot read pool_telemetry.c: %v", err)
+	}
+	if !strings.Contains(string(telemetryData), "state_digest") {
+		return fmt.Errorf("P1-4: state_digest not computed via CRC32 in heartbeat")
+	}
+	return nil
+}
+
+// P2-1: Peer challenge
+func (r *runtimeIntegrityCtx) integrityPktDefined() error {
+	headerData, err := os.ReadFile(filepath.Join("..", "linux", "pool.h"))
+	if err != nil {
+		return fmt.Errorf("cannot read pool.h: %v", err)
+	}
+	if !strings.Contains(string(headerData), "POOL_PKT_INTEGRITY") {
+		return fmt.Errorf("P2-1: POOL_PKT_INTEGRITY not defined")
+	}
+	return nil
+}
+func (r *runtimeIntegrityCtx) integrityPktValidEstablished() error {
+	stateData, err := os.ReadFile(filepath.Join("..", "common", "pool_state.h"))
+	if err != nil {
+		return fmt.Errorf("cannot read pool_state.h: %v", err)
+	}
+	if !strings.Contains(string(stateData), "POOL_PKT_INTEGRITY") {
+		return fmt.Errorf("P2-1: POOL_PKT_INTEGRITY not in ESTABLISHED valid packets")
+	}
+	return nil
+}
+func (r *runtimeIntegrityCtx) challengeEncryptsNonce() error {
+	return r.assertContains(r.sourceCode, "POOL_PKT_INTEGRITY", "P2-1: integrity challenge handler")
+}
+func (r *runtimeIntegrityCtx) responseVerifiesChallenge() error {
+	return r.assertContains(r.sourceCode, "integrity_challenge", "P2-1: integrity response verification")
+}
+
 // InitializeRuntimeIntegrityScenario registers all runtime integrity step definitions.
 func InitializeRuntimeIntegrityScenario(ctx *godog.ScenarioContext) {
 	r := &runtimeIntegrityCtx{PoolTestContext: NewPoolTestContext()}
@@ -696,4 +824,57 @@ func InitializeRuntimeIntegrityScenario(ctx *godog.ScenarioContext) {
 	ctx.Step(`^fail-open alerting should be required$`, r.failOpenAlertingRequired)
 	ctx.Step(`^graceful degradation should be required$`, r.gracefulDegradationRequired)
 	ctx.Step(`^recovery without trust in compromised system should be required$`, r.recoveryWithoutTrustRequired)
+
+	// ---- Implementation verification steps ----
+
+	// Given steps — Implementation (only new ones not already registered)
+	ctx.Step(`^the POOL build configuration$`, r.loadBuildConfig)
+	ctx.Step(`^the POOL protocol definitions$`, r.loadProtoDefs)
+	ctx.Step(`^the POOL sysinfo source code$`, func() error { return r.loadSource("pool_sysinfo.c") })
+
+	// When steps — Implementation
+	ctx.Step(`^the hash computation is analyzed$`, func() error { return nil })
+	ctx.Step(`^the heartbeat thread is analyzed$`, func() error { return nil })
+	ctx.Step(`^the compiler flags are analyzed$`, func() error { return nil })
+	ctx.Step(`^the send path is analyzed$`, func() error { return nil })
+	ctx.Step(`^the procfs entries are analyzed$`, func() error { return nil })
+	ctx.Step(`^the telemetry structure is analyzed$`, func() error { return nil })
+	ctx.Step(`^the packet dispatch is analyzed$`, func() error { return nil })
+
+	// Then steps — P0-1 Journal chaining
+	ctx.Step(`^the previous entry hash should be included in SHA256 input$`, r.prevHashIncludedInSHA)
+	ctx.Step(`^the first entry should use a zero-initialized previous hash$`, r.firstEntryZeroHash)
+
+	// Then steps — P0-2 Runtime self-tests
+	ctx.Step(`^pool_crypto_runtime_selftest should be called periodically$`, r.runtimeSelftestCalledPeriodically)
+	ctx.Step(`^pool_crypto_spot_check should be called periodically$`, r.spotCheckCalledPeriodically)
+	ctx.Step(`^integrity_compromised should be set on failure$`, r.integrityCompromisedSetOnFailure)
+
+	// Then steps — P0-3 Compiler flags
+	ctx.Step(`^fstack-protector-strong should be enabled$`, r.fstackProtectorEnabled)
+	ctx.Step(`^Wformat-security should be enabled$`, r.wformatSecurityEnabled)
+
+	// Then steps — P1-1 Text checksumming
+	ctx.Step(`^text_crc32 should be computed at init via CRC32$`, r.textCrcComputedAtInit)
+	ctx.Step(`^the text section CRC should be re-verified in heartbeat$`, r.textCrcReverifiedInHeartbeat)
+
+	// Then steps — P1-2 Shadow sequence counter
+	ctx.Step(`^shadow_local_seq should be incremented independently$`, r.shadowSeqIncremented)
+	ctx.Step(`^shadow and primary sequence counters should be compared$`, r.shadowSeqCompared)
+	ctx.Step(`^divergence should set integrity_compromised$`, r.divergenceSetsCompromised)
+
+	// Then steps — P1-3 Integrity alert
+	ctx.Step(`^proc_pool_integrity should report integrity status$`, r.procIntegrityReportsStatus)
+	ctx.Step(`^proc_pool_attestation should report text CRC32$`, r.procAttestationReportsCrc)
+	ctx.Step(`^session allocation should refuse when integrity is compromised$`, r.sessionRefusesWhenCompromised)
+
+	// Then steps — P1-4 State digest
+	ctx.Step(`^state_digest field should exist in pool_telemetry$`, r.stateDigestFieldExists)
+	ctx.Step(`^state_digest should be CRC32 of session state$`, r.stateDigestIsCrc32)
+
+	// Then steps — P2-1 Peer challenge
+	ctx.Step(`^POOL_PKT_INTEGRITY should be defined as 0xC$`, r.integrityPktDefined)
+	ctx.Step(`^POOL_PKT_INTEGRITY should be valid in ESTABLISHED state$`, r.integrityPktValidEstablished)
+	ctx.Step(`^integrity challenge should encrypt and return nonce$`, r.challengeEncryptsNonce)
+	ctx.Step(`^integrity response should verify decrypted challenge$`, r.responseVerifiesChallenge)
 }

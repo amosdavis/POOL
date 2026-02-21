@@ -84,6 +84,7 @@ static inline int pool_addr_is_v4mapped(const uint8_t addr[16])
 #define POOL_PKT_ROLLBACK       0x9
 #define POOL_PKT_DISCOVER       0xA
 #define POOL_PKT_JOURNAL        0xB
+#define POOL_PKT_INTEGRITY      0xC  /* T2/T4: Peer crypto challenge-response */
 
 /* ---- Flags (16 bits) ---- */
 

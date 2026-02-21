@@ -12,6 +12,7 @@
 KDIR ?= /lib/modules/$(shell uname -r)/build
 PWD := $(shell pwd)
 CC ?= gcc
+CFLAGS ?= -Wall -O2 -fstack-protector-strong -Wformat -Wformat-security -D_FORTIFY_SOURCE=2
 
 .PHONY: all clean install tools
 
@@ -21,13 +22,13 @@ all: tools
 tools: poolctl pool_test poold
 
 poolctl: poolctl.c pool.h
-	$(CC) -Wall -O2 -o poolctl poolctl.c
+	$(CC) $(CFLAGS) -o poolctl poolctl.c
 
 pool_test: pool_test.c pool.h
-	$(CC) -Wall -O2 -o pool_test pool_test.c
+	$(CC) $(CFLAGS) -o pool_test pool_test.c
 
 poold: poold.c pool.h
-	$(CC) -Wall -O2 -o poold poold.c
+	$(CC) $(CFLAGS) -o poold poold.c
 
 clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean

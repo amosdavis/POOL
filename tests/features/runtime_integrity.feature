@@ -221,3 +221,66 @@ Feature: POOL Runtime Integrity Failure Tenets
     And fail-open alerting should be required
     And graceful degradation should be required
     And recovery without trust in compromised system should be required
+
+  # ---- Implementation Verification Scenarios ----
+
+  @runtime-integrity @implementation
+  Scenario: P0-1 - Journal entries use hash chaining
+    Given the POOL journal source code
+    When the hash computation is analyzed
+    Then the previous entry hash should be included in SHA256 input
+    And the first entry should use a zero-initialized previous hash
+
+  @runtime-integrity @implementation
+  Scenario: P0-2 - Runtime self-tests execute periodically
+    Given the POOL telemetry source code
+    When the heartbeat thread is analyzed
+    Then pool_crypto_runtime_selftest should be called periodically
+    And pool_crypto_spot_check should be called periodically
+    And integrity_compromised should be set on failure
+
+  @runtime-integrity @implementation
+  Scenario: P0-3 - Compiler security flags are enabled
+    Given the POOL build configuration
+    When the compiler flags are analyzed
+    Then fstack-protector-strong should be enabled
+    And Wformat-security should be enabled
+
+  @runtime-integrity @implementation
+  Scenario: P1-1 - Module text section is checksummed
+    Given the POOL main source code
+    When the module initialization is analyzed
+    Then text_crc32 should be computed at init via CRC32
+    And the text section CRC should be re-verified in heartbeat
+
+  @runtime-integrity @implementation
+  Scenario: P1-2 - Shadow sequence counter detects divergence
+    Given the POOL network source code
+    When the send path is analyzed
+    Then shadow_local_seq should be incremented independently
+    And shadow and primary sequence counters should be compared
+    And divergence should set integrity_compromised
+
+  @runtime-integrity @implementation
+  Scenario: P1-3 - Integrity alert mechanism is operational
+    Given the POOL sysinfo source code
+    When the procfs entries are analyzed
+    Then proc_pool_integrity should report integrity status
+    And proc_pool_attestation should report text CRC32
+    And session allocation should refuse when integrity is compromised
+
+  @runtime-integrity @implementation
+  Scenario: P1-4 - Heartbeat includes state digest
+    Given the POOL protocol definitions
+    When the telemetry structure is analyzed
+    Then state_digest field should exist in pool_telemetry
+    And state_digest should be CRC32 of session state
+
+  @runtime-integrity @implementation
+  Scenario: P2-1 - Peer crypto challenge is implemented
+    Given the POOL session source code
+    When the packet dispatch is analyzed
+    Then POOL_PKT_INTEGRITY should be defined as 0xC
+    And POOL_PKT_INTEGRITY should be valid in ESTABLISHED state
+    And integrity challenge should encrypt and return nonce
+    And integrity response should verify decrypted challenge

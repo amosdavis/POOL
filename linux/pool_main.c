@@ -13,6 +13,7 @@
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 #include <linux/version.h>
+#include <linux/crc32.h>
 
 #include "pool_internal.h"
 
@@ -283,6 +284,19 @@ static int __init pool_init(void)
     ret = pool_crypto_init();
     if (ret)
         goto err_crypto;
+
+    /* T1: Compute CRC32 of module .text section for tamper detection (RT-C01) */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 5, 0)
+    {
+        struct module *mod = THIS_MODULE;
+        if (mod->core_layout.base && mod->core_layout.text_size > 0) {
+            pool.text_crc32 = crc32(0, mod->core_layout.base,
+                                    mod->core_layout.text_size);
+            pr_info("POOL: .text CRC32 = 0x%08x (size=%u)\n",
+                    pool.text_crc32, mod->core_layout.text_size);
+        }
+    }
+#endif
 
     /* Generate node identity keypair */
     ret = pool_crypto_gen_keypair(pool.node_privkey, pool.node_pubkey);

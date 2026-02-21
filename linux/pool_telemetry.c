@@ -8,6 +8,9 @@
 
 #include <linux/kthread.h>
 #include <linux/delay.h>
+#include <linux/crc32.h>
+#include <linux/module.h>
+#include <linux/version.h>
 
 #include "pool_internal.h"
 
@@ -79,6 +82,37 @@ static int pool_heartbeat_fn(void *data)
 
     while (!kthread_should_stop()) {
         int i;
+
+        /* T1/T2: Periodic runtime integrity checks (every 12 beats ≈ 60s) */
+        pool.heartbeat_count++;
+        if (pool.heartbeat_count % 12 == 0 && !pool.integrity_compromised) {
+            int rc = pool_crypto_runtime_selftest();
+            if (rc) {
+                pool.integrity_compromised = 1;
+                pr_crit("POOL: runtime self-test failed, module integrity compromised\n");
+            }
+            rc = pool_crypto_spot_check();
+            if (rc) {
+                pool.integrity_compromised = 1;
+                pr_crit("POOL: crypto spot-check failed, module integrity compromised\n");
+            }
+            /* T1: Re-verify module .text section CRC32 (RT-C01) */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 5, 0)
+            if (pool.text_crc32 != 0) {
+                struct module *mod = THIS_MODULE;
+                uint32_t current_crc = crc32(0, mod->core_layout.base,
+                                             mod->core_layout.text_size);
+                if (current_crc != pool.text_crc32) {
+                    pool.integrity_compromised = 1;
+                    pr_crit("POOL: .text CRC32 mismatch (expected=0x%08x, "
+                            "current=0x%08x) — module code modified!\n",
+                            pool.text_crc32, current_crc);
+                }
+            }
+#endif
+            pool.last_integrity_check = ktime_get_ns();
+        }
+
         for (i = 0; i < POOL_MAX_SESSIONS; i++) {
             struct pool_session *s = &pool.sessions[i];
             if (!s->active || s->state != POOL_STATE_ESTABLISHED)
@@ -86,6 +120,30 @@ static int pool_heartbeat_fn(void *data)
 
             /* Send heartbeat with our telemetry */
             s->telemetry.uptime_ns = ktime_get_ns() - s->connect_time;
+
+            /* T4: Compute state digest for cross-peer verification (RT-S01, RT-S03) */
+            {
+                uint32_t crc = crc32(0, (const uint8_t *)&s->crypto.local_seq,
+                                     sizeof(s->crypto.local_seq));
+                crc = crc32(crc, (const uint8_t *)&s->crypto.remote_seq,
+                            sizeof(s->crypto.remote_seq));
+                crc = crc32(crc, (const uint8_t *)&s->crypto.packets_since_rekey,
+                            sizeof(s->crypto.packets_since_rekey));
+                crc = crc32(crc, (const uint8_t *)&s->state,
+                            sizeof(s->state));
+                s->telemetry.state_digest = crc;
+            }
+
+            /* T2/T4: Send periodic integrity challenge to peer (every 12 beats) */
+            if (pool.heartbeat_count % 12 == 0 &&
+                !s->integrity_challenge_pending) {
+                get_random_bytes(s->integrity_challenge, 16);
+                s->integrity_challenge_pending = 1;
+                s->last_integrity_challenge = ktime_get_ns();
+                pool_net_send_packet(s, POOL_PKT_INTEGRITY, 0, 0,
+                                     s->integrity_challenge, 16);
+            }
+
             pool_net_send_packet(s, POOL_PKT_HEARTBEAT,
                                  POOL_FLAG_TELEMETRY, 0,
                                  &s->telemetry,

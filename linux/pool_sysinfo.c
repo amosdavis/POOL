@@ -165,6 +165,67 @@ static const struct proc_ops pool_proc_journal_ops = {
     .proc_release = single_release,
 };
 
+/* ---- /proc/pool/integrity (T8: Integrity alert mechanism) ---- */
+
+static int pool_proc_integrity_show(struct seq_file *m, void *v)
+{
+    seq_printf(m, "Integrity status: %s\n",
+               pool.integrity_compromised ? "COMPROMISED" : "OK");
+    seq_printf(m, "Last integrity check: %llu ns\n",
+               pool.last_integrity_check);
+    seq_printf(m, "Heartbeat count: %u\n", pool.heartbeat_count);
+    seq_printf(m, "Checks performed: %u\n",
+               pool.heartbeat_count > 0 ? pool.heartbeat_count / 12 : 0);
+    return 0;
+}
+
+static int pool_proc_integrity_open(struct inode *inode, struct file *file)
+{
+    return single_open(file, pool_proc_integrity_show, NULL);
+}
+
+static const struct proc_ops pool_proc_integrity_ops = {
+    .proc_open = pool_proc_integrity_open,
+    .proc_read = seq_read,
+    .proc_lseek = seq_lseek,
+    .proc_release = single_release,
+};
+
+/* ---- /proc/pool/attestation (T3: External attestation hook) ---- */
+
+static int pool_proc_attestation_show(struct seq_file *m, void *v)
+{
+    seq_printf(m, "Module: pool.ko\n");
+    seq_printf(m, "Protocol version: %d\n", POOL_VERSION);
+    seq_printf(m, "Integrity status: %s\n",
+               pool.integrity_compromised ? "COMPROMISED" : "OK");
+    seq_printf(m, "Text CRC32: 0x%08x\n", pool.text_crc32);
+    seq_printf(m, "Last self-test: %llu ns\n", pool.last_integrity_check);
+    seq_printf(m, "Heartbeats since check: %u\n",
+               pool.heartbeat_count % 12);
+    seq_printf(m, "Node pubkey: ");
+    {
+        int i;
+        for (i = 0; i < POOL_KEY_SIZE; i++)
+            seq_printf(m, "%02x", pool.node_pubkey[i]);
+    }
+    seq_printf(m, "\n");
+    seq_printf(m, "Sessions ready: %d\n", pool.sessions_ready);
+    return 0;
+}
+
+static int pool_proc_attestation_open(struct inode *inode, struct file *file)
+{
+    return single_open(file, pool_proc_attestation_show, NULL);
+}
+
+static const struct proc_ops pool_proc_attestation_ops = {
+    .proc_open = pool_proc_attestation_open,
+    .proc_read = seq_read,
+    .proc_lseek = seq_lseek,
+    .proc_release = single_release,
+};
+
 /* ---- Init/cleanup ---- */
 
 int pool_sysinfo_init(void)
@@ -183,6 +244,10 @@ int pool_sysinfo_init(void)
                                       &pool_proc_telemetry_ops);
     pool.proc_journal = proc_create("journal", 0444, pool.proc_dir,
                                     &pool_proc_journal_ops);
+    pool.proc_integrity = proc_create("integrity", 0444, pool.proc_dir,
+                                      &pool_proc_integrity_ops);
+    pool.proc_attestation = proc_create("attestation", 0444, pool.proc_dir,
+                                        &pool_proc_attestation_ops);
 
     pr_info("POOL: procfs created at /proc/pool/\n");
     return 0;
@@ -190,6 +255,10 @@ int pool_sysinfo_init(void)
 
 void pool_sysinfo_cleanup(void)
 {
+    if (pool.proc_attestation)
+        proc_remove(pool.proc_attestation);
+    if (pool.proc_integrity)
+        proc_remove(pool.proc_integrity);
     if (pool.proc_journal)
         proc_remove(pool.proc_journal);
     if (pool.proc_telemetry)

@@ -99,6 +99,15 @@ int pool_net_send_packet(struct pool_session *sess, uint8_t type,
     hdr.seq = cpu_to_be64(seq);
     hdr.ack = cpu_to_be64(sess->crypto.remote_seq);
 
+    /* T2: Shadow sequence counter integrity check (RT-S02) */
+    sess->shadow_local_seq++;
+    if (sess->shadow_local_seq != sess->crypto.local_seq) {
+        pr_crit("POOL: sequence counter divergence detected — integrity compromised "
+                "(shadow=%llu, primary=%llu)\n",
+                sess->shadow_local_seq, sess->crypto.local_seq);
+        pool.integrity_compromised = 1;
+    }
+
     /* Encrypt payload if session is established */
     if (payload && payload_len > 0 &&
         sess->state == POOL_STATE_ESTABLISHED) {

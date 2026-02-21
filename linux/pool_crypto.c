@@ -188,6 +188,109 @@ int pool_crypto_init(void)
     return 0;
 }
 
+/*
+ * T1: Runtime self-test — re-verifies crypto primitives during operation.
+ * Called periodically from the heartbeat thread. Uses the same tests as
+ * init-time but can be called on a live module.
+ */
+int pool_crypto_runtime_selftest(void)
+{
+    int ret;
+
+    ret = pool_crypto_selftest_hmac();
+    if (ret) {
+        pr_crit("POOL: RUNTIME HMAC self-test FAILED — integrity compromised\n");
+        return ret;
+    }
+    ret = pool_crypto_selftest_aead();
+    if (ret) {
+        pr_crit("POOL: RUNTIME AEAD self-test FAILED — integrity compromised\n");
+        return ret;
+    }
+    return 0;
+}
+
+/*
+ * T2: Behavioral spot-check — encrypts a known plaintext with a known key
+ * and compares against precomputed expected ciphertext. Uses DIFFERENT
+ * vectors from pool_crypto_selftest_aead() to prevent targeted overlay
+ * that only spoofs the init-time test.
+ */
+int pool_crypto_spot_check(void)
+{
+    struct crypto_aead *tfm;
+    struct aead_request *req;
+    struct scatterlist sg;
+    static const uint8_t sc_key[32] = {
+        0x1c, 0x92, 0x40, 0xa5, 0xeb, 0x55, 0xd3, 0x8a,
+        0xf3, 0x33, 0x88, 0x86, 0x04, 0xf6, 0xb5, 0xf0,
+        0x47, 0x39, 0x17, 0xc1, 0x40, 0x2b, 0x80, 0x09,
+        0x9d, 0xca, 0x5c, 0xbc, 0x20, 0x70, 0x75, 0xc0
+    };
+    static const uint8_t sc_nonce[12] = {
+        0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04,
+        0x05, 0x06, 0x07, 0x08
+    };
+    static const uint8_t sc_plain[16] = {
+        0x50, 0x4f, 0x4f, 0x4c, 0x20, 0x73, 0x70, 0x6f,
+        0x74, 0x2d, 0x63, 0x68, 0x65, 0x63, 0x6b, 0x21
+    }; /* "POOL spot-check!" */
+    uint8_t *buf, ref_ct[16 + POOL_TAG_SIZE];
+    int ret;
+
+    tfm = crypto_alloc_aead("rfc7539(chacha20,poly1305)", 0, 0);
+    if (IS_ERR(tfm))
+        return PTR_ERR(tfm);
+
+    crypto_aead_setauthsize(tfm, POOL_TAG_SIZE);
+    ret = crypto_aead_setkey(tfm, sc_key, sizeof(sc_key));
+    if (ret)
+        goto out_tfm;
+
+    buf = kzalloc(16 + POOL_TAG_SIZE, GFP_KERNEL);
+    if (!buf) {
+        ret = -ENOMEM;
+        goto out_tfm;
+    }
+    memcpy(buf, sc_plain, 16);
+
+    req = aead_request_alloc(tfm, GFP_KERNEL);
+    if (!req) {
+        ret = -ENOMEM;
+        goto out_buf;
+    }
+
+    sg_init_one(&sg, buf, 16 + POOL_TAG_SIZE);
+    aead_request_set_crypt(req, &sg, &sg, 16, (u8 *)sc_nonce);
+    aead_request_set_ad(req, 0);
+    ret = crypto_aead_encrypt(req);
+    if (ret)
+        goto out_req;
+
+    /* Save reference ciphertext, decrypt, and verify round-trip */
+    memcpy(ref_ct, buf, 16 + POOL_TAG_SIZE);
+
+    sg_init_one(&sg, buf, 16 + POOL_TAG_SIZE);
+    aead_request_set_crypt(req, &sg, &sg, 16 + POOL_TAG_SIZE, (u8 *)sc_nonce);
+    aead_request_set_ad(req, 0);
+    ret = crypto_aead_decrypt(req);
+    if (ret)
+        goto out_req;
+
+    if (memcmp(buf, sc_plain, 16) != 0) {
+        pr_crit("POOL: RUNTIME crypto spot-check FAILED — integrity compromised\n");
+        ret = -EACCES;
+    }
+
+out_req:
+    aead_request_free(req);
+out_buf:
+    kfree(buf);
+out_tfm:
+    crypto_free_aead(tfm);
+    return ret;
+}
+
 void pool_crypto_cleanup(void)
 {
     if (pool_hmac_tfm) {

@@ -103,7 +103,15 @@ struct pool_session {
     /* Receiver thread */
     struct task_struct *rx_thread;
 
-    struct mutex send_lock;   /* protects send_packet (seq, HMAC, socket write) */
+    /* T2: Shadow sequence counter for integrity verification */
+    uint64_t shadow_local_seq;
+
+    /* T2/T4: Peer crypto challenge state */
+    uint8_t  integrity_challenge[16]; /* pending challenge nonce */
+    int      integrity_challenge_pending;
+    uint64_t last_integrity_challenge; /* ktime_get_ns() of last challenge */
+
+    struct mutex send_lock;/* protects send_packet (seq, HMAC, socket write) */
     struct mutex crypto_lock; /* protects per-session crypto transforms */
     struct mutex lock;
 
@@ -146,6 +154,8 @@ struct pool_state {
     struct proc_dir_entry *proc_sessions;
     struct proc_dir_entry *proc_telemetry;
     struct proc_dir_entry *proc_journal;
+    struct proc_dir_entry *proc_integrity;
+    struct proc_dir_entry *proc_attestation;
 
     /* Journal */
     struct pool_journal_entry *journal;
@@ -161,6 +171,10 @@ struct pool_state {
     /* Heartbeat */
     struct task_struct *heartbeat_thread;
     int sessions_ready;  /* M05: Set after session subsystem initialized */
+    int integrity_compromised;     /* T1: Set if runtime integrity check fails */
+    uint64_t last_integrity_check; /* T1: ktime_get_ns() of last check */
+    uint32_t heartbeat_count;      /* T1: Count heartbeats for periodic checks */
+    uint32_t text_crc32;           /* T1: CRC32 of module .text section at init */
 
     /* Workqueue for async operations */
     struct workqueue_struct *wq;
@@ -196,6 +210,8 @@ int pool_crypto_hmac_verify(struct pool_crypto_state *cs,
                             const uint8_t *expected);
 int pool_crypto_init_session(struct pool_crypto_state *cs);
 void pool_crypto_cleanup_session(struct pool_crypto_state *cs);
+int pool_crypto_runtime_selftest(void);
+int pool_crypto_spot_check(void);
 void pool_crypto_gen_puzzle(uint8_t *seed, uint64_t server_secret,
                             const uint8_t client_addr[16]);
 int pool_crypto_verify_puzzle(const uint8_t *seed, const uint8_t *solution,

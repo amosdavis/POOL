@@ -123,6 +123,7 @@ struct pool_telemetry {
     uint64_t uptime_ns;
     uint32_t rekey_count;
     uint32_t config_version;
+    uint32_t state_digest;       /* T4: CRC32 of session state for cross-peer verification */
 };
 
 /* ---- Handshake Payloads ---- */
