@@ -292,3 +292,36 @@ Four workflows covering all platforms:
 - macOS: `.pkg` installer via `pkgbuild --identifier com.pool.protocol`
 - Windows: `pool_service.exe` via MinGW cross-compilation
 - Both attached to GitHub Release on v* tag push
+
+## Phase 9: Runtime Integrity Failure Tenets
+
+### 9.1 Threat Model Documentation — ✅ DONE
+- Created `spec/RUNTIME_INTEGRITY.md`: formal failure tenets document
+- Threat model: runtime binary modification and hardware overlay circuitry
+- 20 POOL-specific failure modes across 4 categories:
+  - Crypto Path Tampering (RT-C01 through RT-C06)
+  - Session & State Tampering (RT-S01 through RT-S05)
+  - Observability & Audit Tampering (RT-A01 through RT-A04)
+  - Userspace & Adoption Tool Tampering (RT-U01 through RT-U05)
+- 8 binding design tenets (T1–T8):
+  - T1: Continuous Runtime Attestation
+  - T2: Behavioral Verification Over Binary Verification
+  - T3: Hardware Root of Trust
+  - T4: Replicated Execution with Consensus
+  - T5: Cryptographic Execution Proofs
+  - T6: Self-Verifying Code (Canaries)
+  - T7: Append-Only External Audit Logs
+  - T8: Assume Compromise, Design for Detection
+- Mitigation matrix mapping all 20 failure modes to applicable tenets
+- Analysis of existing POOL mechanisms and their gaps under this threat model
+- Implementation priority roadmap (P0–P3)
+
+### 9.2 BDD Test Coverage — ✅ DONE
+- Created `tests/features/runtime_integrity.feature` (28 scenarios)
+- Created `tests/steps/runtime_integrity_steps.go` (step definitions)
+- Coverage across all 4 failure categories and all 8 tenets
+- Static analysis style tests verifying POOL code contains required mitigations
+
+### 9.3 Project Rules — ✅ DONE
+- Created `.github/copilot-instructions.md` with runtime integrity tenets
+- Ensures any future agent incorporates the tenets into design decisions
