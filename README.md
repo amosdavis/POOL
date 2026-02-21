@@ -186,6 +186,18 @@ See [`spec/SECURITY.md`](spec/SECURITY.md) for the vulnerability response playbo
 
 ## Test Results
 
+**Benchmark Environment:**
+
+| Component | Specification |
+|-----------|--------------|
+| Host OS | Windows 11 Home (Build 26200) |
+| Host CPU | AMD Ryzen 5 5500U (6 cores / 12 threads, 2.1 GHz base) |
+| Host RAM | 7,577 MB DDR4 |
+| Hypervisor | QEMU (2 VMs, default settings) |
+| Guest OS | Linux (kernel 6.1+) |
+| Network | QEMU user-mode networking (SLiRP) |
+| Kernel Module | pool.ko with ChaCha20-Poly1305 + HMAC-SHA256 |
+
 ```
 === POOL Data Transfer Complete ===
 Total sent:     524288000 bytes (500.0 MB)
