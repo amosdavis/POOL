@@ -325,3 +325,17 @@ Four workflows covering all platforms:
 ### 9.3 Project Rules — ✅ DONE
 - Created `.github/copilot-instructions.md` with runtime integrity tenets
 - Ensures any future agent incorporates the tenets into design decisions
+
+### 9.4 Mitigation Implementation (P0–P3) — ✅ DONE
+- P0-1: Journal Merkle chain linking (`pool_journal.c`)
+- P0-2: Periodic crypto self-test re-execution every ~60s (`pool_crypto.c`, `pool_telemetry.c`)
+- P0-3: Compiler security flags (`-fstack-protector-strong`, `-Wformat-security`)
+- P0-4: Crypto behavioral spot-check with known-answer vectors (`pool_crypto.c`)
+- P1-1: Module `.text` CRC32 checksumming at init + heartbeat re-verify (`pool_main.c`)
+- P1-2: Shadow sequence counter with divergence detection (`pool_net.c`)
+- P1-3: Integrity alert: `/proc/pool/integrity`, `/proc/pool/attestation`, session refusal (`pool_sysinfo.c`, `pool_session.c`)
+- P1-4: Heartbeat state digest exchange via CRC32 (`pool_telemetry.c`, `pool_proto.h`)
+- P2-1: Peer crypto challenge-response via `POOL_PKT_INTEGRITY` 0xC (`pool_session.c`, `pool.h`, `pool_state.h`)
+- P2-2: Attestation procfs with text CRC32, pubkey, status (`pool_sysinfo.c`)
+- P3-1: Added §9 Implementation Status to `RUNTIME_INTEGRITY.md`
+- P3-2: Added 9 BDD implementation verification scenarios + step definitions
