@@ -27,6 +27,7 @@ func TestFeatures(t *testing.T) {
 			InitializeIPv6Scenario(ctx)
 			InitializeFailureModeScenario(ctx)
 			InitializeRuntimeIntegrityScenario(ctx)
+			InitializeBehavioralNumberScenario(ctx)
 		},
 		Options: &opts,
 	}

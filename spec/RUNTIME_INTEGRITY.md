@@ -395,6 +395,11 @@ produced for given inputs — is more robust.
 
 **Addresses:** RT-C02, RT-C04, RT-C05, RT-S02
 
+> **See also:** `spec/BEHAVIORAL_NUMBERS.md` — The Behavioral Number primitive
+> implements this tenet externally: `BN(f, V) = balternary(SHA-256(f(v₁)‖…‖f(vₙ)))`
+> produces a balanced-ternary attestation string derived entirely from what a
+> cryptographic function *does* against RFC test vectors.
+
 ### Tenet T3: Hardware Root of Trust
 
 > Verification mechanisms must exist in a physically separate domain
@@ -478,6 +483,11 @@ proof speaks for itself.
    if the verifier is on a different system (Tenet T4).
 
 **Addresses:** RT-A02, RT-C05, RT-S04
+
+> **See also:** `spec/BEHAVIORAL_NUMBERS.md` — BN strings are a form of
+> cryptographic execution proof: they represent the SHA-256 of concatenated
+> RFC-vector outputs, encoded in balanced ternary, and can be independently
+> verified by any third party without access to POOL's source binary.
 
 ### Tenet T6: Self-Verifying Code (Canaries)
 
