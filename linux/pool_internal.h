@@ -156,6 +156,7 @@ struct pool_state {
     struct proc_dir_entry *proc_journal;
     struct proc_dir_entry *proc_integrity;
     struct proc_dir_entry *proc_attestation;
+    struct proc_dir_entry *proc_tpm_pcr;
 
     /* Journal */
     struct pool_journal_entry *journal;
@@ -175,6 +176,7 @@ struct pool_state {
     uint64_t last_integrity_check; /* T1: ktime_get_ns() of last check */
     uint32_t heartbeat_count;      /* T1: Count heartbeats for periodic checks */
     uint32_t text_crc32;           /* T1: CRC32 of module .text section at init */
+    int bn_digest_ok;              /* T2: Set if behavioral number digest check passes */
 
     /* Workqueue for async operations */
     struct workqueue_struct *wq;
@@ -212,6 +214,7 @@ int pool_crypto_init_session(struct pool_crypto_state *cs);
 void pool_crypto_cleanup_session(struct pool_crypto_state *cs);
 int pool_crypto_runtime_selftest(void);
 int pool_crypto_spot_check(void);
+int pool_crypto_bn_digest_check(void);
 void pool_crypto_gen_puzzle(uint8_t *seed, uint64_t server_secret,
                             const uint8_t client_addr[16]);
 int pool_crypto_verify_puzzle(const uint8_t *seed, const uint8_t *solution,
@@ -312,6 +315,13 @@ void pool_discover_handle_exchange(struct pool_session *sess,
                                    const uint8_t *payload, uint32_t plen);
 int pool_discover_build_exchange(uint8_t *buf, int max_len);
 int pool_discover_peer_count(void);
+
+/* pool_tpm.c — Software measurement chain (T3 TPM/PCR hook) */
+int pool_tpm_init(void);
+void pool_tpm_cleanup(void);
+void pool_tpm_extend(const uint8_t *data, size_t len);
+void pool_tpm_get_pcr(uint8_t out[32]);
+uint32_t pool_tpm_get_extend_count(void);
 
 /* pool_pqc.c — Post-quantum cryptography (ML-KEM-768 hybrid) */
 #define MLKEM_PUBKEY_SIZE   1184

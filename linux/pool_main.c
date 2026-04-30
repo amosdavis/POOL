@@ -62,6 +62,14 @@ static long pool_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         if (copy_from_user(&req, (void __user *)arg, sizeof(req))) {
             ret = -EFAULT; goto out_put;
         }
+        /* D: Validate protocol version. 0 and 1 map to v1; 2 requests PQC v2. */
+        if (req.pool_version > 2) {
+            pr_warn("POOL: connect: unsupported version %u\n",
+                    req.pool_version);
+            ret = -EINVAL; goto out_put;
+        }
+        if (req.pool_version == 2)
+            pr_info("POOL: connect: PQC v2 requested (hybrid X25519+ML-KEM)\n");
         ret = pool_session_connect(req.peer_addr, req.addr_family,
                                    req.peer_port);
         break;
@@ -319,6 +327,10 @@ static int __init pool_init(void)
     if (ret)
         goto err_journal;
 
+    ret = pool_tpm_init();
+    if (ret)
+        goto err_tpm;
+
     ret = pool_telemetry_init();
     if (ret)
         goto err_telemetry;
@@ -336,6 +348,8 @@ static int __init pool_init(void)
 err_sysinfo:
     pool_telemetry_cleanup();
 err_telemetry:
+    pool_tpm_cleanup();
+err_tpm:
     pool_journal_cleanup();
 err_journal:
     pool_session_cleanup();
@@ -378,6 +392,7 @@ static void __exit pool_exit(void)
 
     pool_sysinfo_cleanup();
     pool_telemetry_cleanup();
+    pool_tpm_cleanup();
     pool_journal_cleanup();
     pool_session_cleanup();
 

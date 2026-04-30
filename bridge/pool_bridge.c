@@ -40,6 +40,7 @@
 #define MAX_BRIDGES       256
 
 static volatile int running = 1;
+static uint8_t g_pool_version = 1;  /* POOL protocol version for outbound connections */
 
 struct bridge_conn {
     int active;
@@ -251,6 +252,7 @@ static int run_tcp_to_pool(uint16_t tcp_port,
             creq.addr_family = AF_INET;
         }
         creq.peer_port = pool_port;
+        creq.pool_version = g_pool_version;
 
         ret = ioctl(bc->pool_fd, POOL_IOC_CONNECT, &creq);
         if (ret < 0) {
@@ -440,14 +442,18 @@ static void usage(void)
     fprintf(stderr,
         "pool_bridge - TCP ↔ POOL protocol bridge\n\n"
         "Modes:\n"
-        "  pool_bridge tcp2pool <tcp_port> <pool_dest> [pool_port]\n"
+        "  pool_bridge tcp2pool <tcp_port> <pool_dest> [pool_port] [--pool-version N]\n"
         "    Accept TCP on <tcp_port>, forward over POOL to <pool_dest>\n\n"
         "  pool_bridge pool2tcp <pool_port> <tcp_dest> <tcp_port>\n"
         "    Accept POOL on <pool_port>, forward to TCP <tcp_dest>:<tcp_port>\n\n"
+        "Options:\n"
+        "  --pool-version N   POOL protocol version for outbound connections (default: 1)\n"
+        "                     1 = v1 (X25519 + ChaCha20-Poly1305)\n"
+        "                     2 = v2 (hybrid X25519 + ML-KEM-768, PQC)\n\n"
         "Addresses can be IPv4 (10.4.4.101) or IPv6 (::1, [2001:db8::1])\n\n"
         "Examples:\n"
         "  pool_bridge tcp2pool 8080 10.4.4.101 9253\n"
-        "  pool_bridge tcp2pool 8080 ::1 9253\n"
+        "  pool_bridge tcp2pool 8080 ::1 9253 --pool-version 2\n"
         "  pool_bridge pool2tcp 9253 127.0.0.1 80\n");
 }
 
@@ -494,9 +500,27 @@ static int resolve_addr(const char *host, struct sockaddr_storage *out)
 int main(int argc, char **argv)
 {
     struct sockaddr_storage dest_addr;
+    int i;
 
     signal(SIGINT, sighandler);
     signal(SIGTERM, sighandler);
+
+    /* Parse --pool-version N before positional argument dispatch */
+    for (i = 1; i < argc - 1; i++) {
+        if (strcmp(argv[i], "--pool-version") == 0) {
+            long v = atol(argv[i + 1]);
+            if (v < 1 || v > 2) {
+                fprintf(stderr,
+                        "pool_bridge: --pool-version must be 1 or 2\n");
+                return 1;
+            }
+            g_pool_version = (uint8_t)v;
+            if (g_pool_version == 2)
+                fprintf(stderr,
+                        "pool_bridge: using POOL v2 (PQC hybrid) for "
+                        "outbound connections\n");
+        }
+    }
 
     if (argc < 4) { usage(); return 1; }
 

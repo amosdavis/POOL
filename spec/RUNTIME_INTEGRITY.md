@@ -414,10 +414,16 @@ physical domain.
 1. **TPM-based module attestation:** On platforms with a TPM, extend a PCR
    with the hash of `pool.ko` at load time. External verifiers can request
    a TPM quote to confirm module integrity.
-2. **Secure enclave integration (future):** On platforms with SGX, TrustZone,
+2. **Software measurement chain (implemented):** `linux/pool_tpm.c` provides a
+   software PCR (SHA-256 chained extend, `PCR_new = SHA-256(PCR_old ‖ data)`)
+   that is extended on every journal entry, crypto spot-check pass, and session
+   establishment. Readable at `/proc/pool/tpm_pcr`. This is a T3 *hook*: it
+   provides the same measurement semantics as a real TPM PCR and can be
+   replaced by hardware TPM calls when available. See `tests/features/tpm_pcr.feature`.
+3. **Secure enclave integration (future):** On platforms with SGX, TrustZone,
    or equivalent, execute critical crypto operations inside the enclave where
    overlay is infeasible.
-3. **Out-of-band attestation channel:** Provide a mechanism for a physically
+4. **Out-of-band attestation channel:** Provide a mechanism for a physically
    separate device (e.g., a hardware security module or a dedicated
    verification appliance) to independently query and verify POOL's state
    via a channel that does not traverse the overlaid system.
@@ -713,6 +719,10 @@ codebase. Each maps to one or more tenets (T1–T8) and failure modes (RT-*).
 |-----------|-------|-------------|---------|
 | Peer crypto challenge-response (`POOL_PKT_INTEGRITY 0xC`) | T2, T4 | RT-C02, RT-C04 | `pool.h`, `pool_state.h`, `pool_session.c`, `pool_telemetry.c` |
 | Attestation procfs interface (`/proc/pool/attestation`) | T3 | RT-C01, RT-A03 | `pool_sysinfo.c`, `pool_internal.h` |
+| Software PCR measurement chain (`/proc/pool/tpm_pcr`) | T3 | RT-C01, RT-A01, RT-A03 | `linux/pool_tpm.c`, `pool_sysinfo.c`, `pool_main.c` |
+| Behavioral number digest check in kernel spot-check | T1, T2, T5 | RT-C01, RT-C02 | `linux/pool_crypto.c` |
+| CI/CD BN verification workflow | T2, T5 | RT-C01, RT-C02 | `.github/workflows/attestation.yml` |
+| pool_bridge `--pool-version` cross-version adapter | — | RT-U02 | `bridge/pool_bridge.c`, `linux/pool.h`, `linux/pool_main.c` |
 
 ### 9.4 Out of Scope
 

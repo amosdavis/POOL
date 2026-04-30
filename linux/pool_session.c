@@ -523,6 +523,8 @@ int pool_session_connect(const uint8_t peer_addr[16], uint8_t addr_family,
     sess->state = POOL_STATE_ESTABLISHED;
     sess->connect_time = ktime_get_ns();
     sess->telemetry.mtu_current = POOL_DEFAULT_MTU;
+    /* T3: Extend PCR with session establishment (server side) */
+    pool_tpm_extend(sess->session_id, POOL_SESSION_ID_SIZE);
 
     ret = pool_net_send_packet(sess, POOL_PKT_RESPONSE,
                                POOL_FLAG_ENCRYPTED | POOL_FLAG_REQUIRE_ACK,
@@ -663,6 +665,8 @@ int pool_session_accept(struct socket *client_sock)
     sess->state = POOL_STATE_ESTABLISHED;
     sess->connect_time = ktime_get_ns();
     sess->telemetry.mtu_current = POOL_DEFAULT_MTU;
+    /* T3: Extend PCR with session establishment (client side) */
+    pool_tpm_extend(sess->session_id, POOL_SESSION_ID_SIZE);
 
     /* Receive RESPONSE (with timeout for puzzle-solving) */
     pool_net_set_sock_rcvtimeo(sess->sock, 30);

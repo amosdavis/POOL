@@ -69,6 +69,8 @@ void pool_journal_add(uint16_t change_type, uint32_t ver_before,
             crypto_shash_update(desc, detail, detail_len);
         crypto_shash_final(desc, e->change_hash);
         crypto_free_shash(sha);
+        /* T3: Extend PCR with this journal entry's hash */
+        pool_tpm_extend(e->change_hash, 32);
     } else {
         memset(e->change_hash, 0, 32);
     }

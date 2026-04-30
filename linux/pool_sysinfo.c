@@ -199,6 +199,8 @@ static int pool_proc_attestation_show(struct seq_file *m, void *v)
     seq_printf(m, "Protocol version: %d\n", POOL_VERSION);
     seq_printf(m, "Integrity status: %s\n",
                pool.integrity_compromised ? "COMPROMISED" : "OK");
+    seq_printf(m, "BN digest status: %s\n",
+               pool.bn_digest_ok ? "PASS" : "PENDING");
     seq_printf(m, "Text CRC32: 0x%08x\n", pool.text_crc32);
     seq_printf(m, "Last self-test: %llu ns\n", pool.last_integrity_check);
     seq_printf(m, "Heartbeats since check: %u\n",
@@ -226,6 +228,40 @@ static const struct proc_ops pool_proc_attestation_ops = {
     .proc_release = single_release,
 };
 
+/* ---- /proc/pool/tpm_pcr (T3: Software measurement chain) ---- */
+
+static int pool_proc_tpm_pcr_show(struct seq_file *m, void *v)
+{
+    uint8_t pcr[32];
+    uint32_t count;
+    int i;
+
+    pool_tpm_get_pcr(pcr);
+    count = pool_tpm_get_extend_count();
+
+    seq_printf(m, "Software PCR (SHA-256 measurement chain)\n");
+    seq_printf(m, "Extensions: %u\n", count);
+    seq_printf(m, "PCR value: ");
+    for (i = 0; i < 32; i++)
+        seq_printf(m, "%02x", pcr[i]);
+    seq_printf(m, "\n");
+    seq_printf(m, "Note: software measurement chain, not hardware TPM\n");
+    seq_printf(m, "      See spec/RUNTIME_INTEGRITY.md tenet T3\n");
+    return 0;
+}
+
+static int pool_proc_tpm_pcr_open(struct inode *inode, struct file *file)
+{
+    return single_open(file, pool_proc_tpm_pcr_show, NULL);
+}
+
+static const struct proc_ops pool_proc_tpm_pcr_ops = {
+    .proc_open = pool_proc_tpm_pcr_open,
+    .proc_read = seq_read,
+    .proc_lseek = seq_lseek,
+    .proc_release = single_release,
+};
+
 /* ---- Init/cleanup ---- */
 
 int pool_sysinfo_init(void)
@@ -248,6 +284,8 @@ int pool_sysinfo_init(void)
                                       &pool_proc_integrity_ops);
     pool.proc_attestation = proc_create("attestation", 0444, pool.proc_dir,
                                         &pool_proc_attestation_ops);
+    pool.proc_tpm_pcr = proc_create("tpm_pcr", 0444, pool.proc_dir,
+                                    &pool_proc_tpm_pcr_ops);
 
     pr_info("POOL: procfs created at /proc/pool/\n");
     return 0;
@@ -255,6 +293,8 @@ int pool_sysinfo_init(void)
 
 void pool_sysinfo_cleanup(void)
 {
+    if (pool.proc_tpm_pcr)
+        proc_remove(pool.proc_tpm_pcr);
     if (pool.proc_attestation)
         proc_remove(pool.proc_attestation);
     if (pool.proc_integrity)

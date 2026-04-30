@@ -1,0 +1,62 @@
+name: Behavioral Number Attestation
+
+# Verify that POOL's cryptographic primitives produce known-good outputs.
+# Uses Behavioral Numbers (BNs) — balanced-ternary fingerprints derived from
+# RFC test vector outputs — to catch silent behavioral drift. See:
+# spec/BEHAVIORAL_NUMBERS.md for definitions and reference values.
+#
+# Tenet T2: Behavioral Verification (verify what code *does*, not what it *is*)
+# Tenet T5: Cryptographic Execution Proofs
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  attest-behavioral-numbers:
+    name: Verify Behavioral Numbers
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: false
+
+      - name: Build behavioral number tool
+        working-directory: tools/pool_behavioral_number
+        run: go build -o pool_behavioral_number .
+
+      - name: Verify HMAC-SHA256 BN (RFC 4231 TC2)
+        working-directory: tools/pool_behavioral_number
+        run: |
+          ./pool_behavioral_number \
+            --verify 10T1011T1T1TTT001TT0T0101T10T1011111T0100T01T000T00011TT1T1TT0T01TT1TTT1T111T00T01011010T0000T0T01T1T0T1010001T00110T11100TT1TT1010TTTTT1TT11T11111T10T1T1T1T00TT0 \
+            hmac
+
+      - name: Verify ChaCha20-Poly1305 BN (RFC 7539 §2.8.2)
+        working-directory: tools/pool_behavioral_number
+        run: |
+          ./pool_behavioral_number \
+            --verify 1TT0TT101TT1T1001T1T01T01T110110T1T0TT0T100T0101111000TT0T01T101T1T00T0T0TT0T111110101111T0T0T11T0T10TT0TT1010T1011T10T10001T01100T0T1TT0100T1T0T00T1T1TTT0T0011TT \
+            aead
+
+      - name: Verify HKDF-SHA256 BN (RFC 5869 TC1)
+        working-directory: tools/pool_behavioral_number
+        run: |
+          ./pool_behavioral_number \
+            --verify 11T1TT01T000010TTT1T1T1TT00TT0000TT101TTT101T000T0100101111T1T0T110000010T1TT000000001000000111T001T11011TT0111000TTTT1001T1111000T0T0100T01T1T011011T10T0T01T1001 \
+            hkdf
+
+      - name: Verify X25519 BN (RFC 7748 §6.1)
+        working-directory: tools/pool_behavioral_number
+        run: |
+          ./pool_behavioral_number \
+            --verify 1TTTT1111T101TT11T0T0101001T1T000TTT1T110011T001111011TT0110000000TTT1T011T101T1TT01011TTT0001T1T1T0TT11T0110T010T1T10TT0TT111T10T10T010T0TTT0TT10T011000110T1100T0 \
+            ecdh
+

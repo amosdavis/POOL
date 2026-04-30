@@ -288,10 +288,210 @@ out_buf:
     kfree(buf);
 out_tfm:
     crypto_free_aead(tfm);
+    if (ret)
+        return ret;
+
+    /* T2: Also verify behavioral number digests on each spot-check */
+    ret = pool_crypto_bn_digest_check();
+    if (ret) {
+        pr_crit("POOL: BN digest check FAILED — behavioral integrity compromised\n");
+        pool.integrity_compromised = 1;
+    } else {
+        pool.bn_digest_ok = 1;
+        /* T3: Extend PCR with spot-check pass event */
+        {
+            static const uint8_t sc_event[] = "pool-spot-check-pass";
+            pool_tpm_extend(sc_event, sizeof(sc_event) - 1);
+        }
+    }
     return ret;
 }
 
-void pool_crypto_cleanup(void)
+/*
+ * T2: Behavioral Number digest check — verify that each crypto primitive
+ * produces the correct output for its RFC test vector by comparing the
+ * SHA-256 of the actual output against a precomputed reference digest.
+ *
+ * This differs from pool_crypto_selftest_* in that it binds the *output value*
+ * into a second-level digest, making targeted single-vector bypasses harder.
+ *
+ * Reference digests (from spec/BEHAVIORAL_NUMBERS.md):
+ *   HMAC:  SHA-256(RFC4231-TC2 output)   = 86ea816b...
+ *   AEAD:  SHA-256(RFC7539-§2.8.2 ct+tag) = 4e54427e...
+ */
+int pool_crypto_bn_digest_check(void)
+{
+    /* RFC 4231 TC2 reference digest: SHA-256(HMAC output) */
+    static const uint8_t hmac_ref[32] = {
+        0x86, 0xea, 0x81, 0x6b, 0xe8, 0x59, 0xea, 0x16,
+        0x76, 0x4f, 0x63, 0x71, 0xc1, 0xb0, 0xe0, 0xb5,
+        0x57, 0x7e, 0xfb, 0x5e, 0x6e, 0x72, 0xb2, 0x0e,
+        0xd5, 0xf6, 0x83, 0xc5, 0x03, 0xf8, 0xe8, 0x0f
+    };
+    /* RFC 7539 §2.8.2 reference digest: SHA-256(ciphertext || tag, 130 bytes) */
+    static const uint8_t aead_ref[32] = {
+        0x4e, 0x54, 0x42, 0x7e, 0x46, 0x2f, 0x3b, 0xeb,
+        0x69, 0x67, 0x7d, 0x39, 0x86, 0x5c, 0x5d, 0xa8,
+        0xd5, 0x7f, 0x60, 0x3a, 0x85, 0xf7, 0xbf, 0x71,
+        0x36, 0x8d, 0xce, 0x8e, 0xc9, 0xb9, 0x93, 0x3c
+    };
+    /* RFC 7539 §2.8.2 test vector */
+    static const uint8_t aead_key[32] = {
+        0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
+        0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f,
+        0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97,
+        0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f
+    };
+    static const uint8_t aead_nonce[12] = {
+        0x07, 0x00, 0x00, 0x00, 0x40, 0x41, 0x42, 0x43,
+        0x44, 0x45, 0x46, 0x47
+    };
+    static const uint8_t aead_aad[12] = {
+        0x50, 0x51, 0x52, 0x53, 0xc0, 0xc1, 0xc2, 0xc3,
+        0xc4, 0xc5, 0xc6, 0xc7
+    };
+    /* 114-byte RFC 7539 §2.8.2 plaintext */
+    static const uint8_t aead_plain[114] =
+        "Ladies and Gentlemen of the class of '99: "
+        "If I could offer you only one tip for the future, "
+        "sunscreen would be it.";
+
+    static const size_t AAD_LEN   = 12;
+    static const size_t PLAIN_LEN = 114;
+    static const size_t CT_LEN    = 114 + POOL_TAG_SIZE; /* 130 */
+
+    struct crypto_aead *aead_tfm;
+    struct aead_request *req;
+    struct scatterlist sg;
+    struct crypto_shash *sha256;
+    SHASH_DESC_ON_STACK(sha_desc, NULL);
+    uint8_t hmac_out[32], hmac_digest[32], aead_digest[32];
+    uint8_t *buf;
+    int ret;
+
+    /* ---- Part 1: HMAC-SHA256 RFC 4231 TC2 output digest ---- */
+    if (!pool_hmac_tfm) {
+        pr_err("POOL: BN digest check: HMAC tfm unavailable\n");
+        return -EINVAL;
+    }
+    {
+        static const uint8_t hmac_key[] = "Jefe";
+        static const uint8_t hmac_data[] = "what do ya want for nothing?";
+        SHASH_DESC_ON_STACK(hmac_desc, pool_hmac_tfm);
+
+        hmac_desc->tfm = pool_hmac_tfm;
+        ret = crypto_shash_setkey(pool_hmac_tfm, hmac_key, 4);
+        if (ret)
+            return ret;
+        ret = crypto_shash_init(hmac_desc);
+        if (ret)
+            return ret;
+        ret = crypto_shash_update(hmac_desc, hmac_data, 28);
+        if (ret)
+            return ret;
+        ret = crypto_shash_final(hmac_desc, hmac_out);
+        if (ret)
+            return ret;
+    }
+
+    sha256 = crypto_alloc_shash("sha256", 0, 0);
+    if (IS_ERR(sha256))
+        return PTR_ERR(sha256);
+
+    sha_desc->tfm = sha256;
+    ret = crypto_shash_init(sha_desc);
+    if (ret)
+        goto out_sha256_1;
+    ret = crypto_shash_update(sha_desc, hmac_out, 32);
+    if (ret)
+        goto out_sha256_1;
+    ret = crypto_shash_final(sha_desc, hmac_digest);
+    if (ret)
+        goto out_sha256_1;
+
+    if (crypto_memneq(hmac_digest, hmac_ref, 32)) {
+        pr_crit("POOL: BN digest check: HMAC behavioral digest FAILED\n");
+        ret = -EACCES;
+        goto out_sha256_1;
+    }
+
+    crypto_free_shash(sha256);
+    sha256 = NULL;
+
+    /* ---- Part 2: AEAD RFC 7539 §2.8.2 ciphertext digest ---- */
+    aead_tfm = crypto_alloc_aead("rfc7539(chacha20,poly1305)", 0, 0);
+    if (IS_ERR(aead_tfm))
+        return PTR_ERR(aead_tfm);
+
+    crypto_aead_setauthsize(aead_tfm, POOL_TAG_SIZE);
+    ret = crypto_aead_setkey(aead_tfm, aead_key, sizeof(aead_key));
+    if (ret)
+        goto out_aead;
+
+    /* Buffer layout: [AAD(12)][plaintext(114)][tag space(16)] = 142 bytes */
+    buf = kzalloc(AAD_LEN + CT_LEN, GFP_KERNEL);
+    if (!buf) {
+        ret = -ENOMEM;
+        goto out_aead;
+    }
+    memcpy(buf, aead_aad, AAD_LEN);
+    memcpy(buf + AAD_LEN, aead_plain, PLAIN_LEN);
+
+    req = aead_request_alloc(aead_tfm, GFP_KERNEL);
+    if (!req) {
+        ret = -ENOMEM;
+        goto out_buf;
+    }
+
+    sg_init_one(&sg, buf, AAD_LEN + CT_LEN);
+    aead_request_set_crypt(req, &sg, &sg, PLAIN_LEN, (u8 *)aead_nonce);
+    aead_request_set_ad(req, AAD_LEN);
+    ret = crypto_aead_encrypt(req);
+    if (ret)
+        goto out_req;
+
+    /* Digest ciphertext+tag (bytes [AAD_LEN .. AAD_LEN+CT_LEN)) */
+    sha256 = crypto_alloc_shash("sha256", 0, 0);
+    if (IS_ERR(sha256)) {
+        ret = PTR_ERR(sha256);
+        sha256 = NULL;
+        goto out_req;
+    }
+    sha_desc->tfm = sha256;
+    ret = crypto_shash_init(sha_desc);
+    if (ret)
+        goto out_sha256_2;
+    ret = crypto_shash_update(sha_desc, buf + AAD_LEN, CT_LEN);
+    if (ret)
+        goto out_sha256_2;
+    ret = crypto_shash_final(sha_desc, aead_digest);
+    if (ret)
+        goto out_sha256_2;
+
+    if (crypto_memneq(aead_digest, aead_ref, 32)) {
+        pr_crit("POOL: BN digest check: AEAD behavioral digest FAILED\n");
+        ret = -EACCES;
+    }
+
+out_sha256_2:
+    crypto_free_shash(sha256);
+    sha256 = NULL;
+out_req:
+    aead_request_free(req);
+out_buf:
+    kfree(buf);
+out_aead:
+    crypto_free_aead(aead_tfm);
+    if (!ret)
+        pr_debug("POOL: BN digest check passed\n");
+    return ret;
+
+out_sha256_1:
+    crypto_free_shash(sha256);
+    return ret;
+}
+
+
 {
     if (pool_hmac_tfm) {
         crypto_free_shash(pool_hmac_tfm);

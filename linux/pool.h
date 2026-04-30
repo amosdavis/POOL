@@ -199,7 +199,8 @@ struct pool_connect_req {
     uint8_t  peer_addr[16]; /* IPv4: stored as ::ffff:x.x.x.x (IPv4-mapped) */
     uint16_t peer_port;
     uint8_t  addr_family;   /* AF_INET or AF_INET6 */
-    uint8_t  reserved[5];
+    uint8_t  pool_version;  /* 0 or 1 = v1 (X25519), 2 = v2 (PQC hybrid) */
+    uint8_t  reserved[4];
 };
 
 /* Send data on a session */
